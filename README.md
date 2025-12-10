@@ -2,9 +2,26 @@
 
 [![Open Proposal](https://img.shields.io/badge/Proposal-PDF-red?style=flat-square)](https://github.com/LucasPilla/3d-scanning-and-motion-capture/blob/main/docs/proposal.pdf)
 
-## Environment
+## TODO
 
-First, navigate to the folder containing your `Dockerfile` and build the image. This will create a Docker image named `3dsmc-project`.
+- [x] Configure repository, CMake and Docker
+- [x] Implement 2D keypoint detection with OpenPose
+- [ ] Implement SMPL parameters optimization with Ceres
+- [ ] Evaluate baseline
+- [ ] Implement proposed enhancements
+- [ ] Evaluate proposed method
+- [ ] Write the final report
+- [ ] Prepare presentation
+
+## Setup
+
+First, clone this GitHub repository.
+
+```
+git clone https://github.com/LucasPilla/3d-scanning-and-motion-capture
+```
+
+Navigate to the folder containing the `Dockerfile` and build the image. This will create a Docker image named `3dsmc-project`.
 
 ```
 docker build -t 3dsmc-project .
@@ -29,12 +46,6 @@ make
 
 ## Run
 
-The current pipeline processes a video frame by frame, runs 2D keypoint detection with OpenPose, and saves the results as a new video file.
-
 ```
 ./pipeline <path-to-video>
 ```
-
-
-
-
