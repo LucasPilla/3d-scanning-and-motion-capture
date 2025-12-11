@@ -1,3 +1,14 @@
+// main.cpp
+// ---------
+// Pipeline entry point.
+// Steps:
+//  1) Load video frames (VideoLoader)
+//  2) Extract 2D joints using OpenPose (PoseDetector)
+//  3) Fit SMPL to each frame (FittingOptimizer)
+//  4) Apply temporal smoothing (TemporalSmoother)
+//  5) Visualize or export results (Visualization)
+
+
 #include <openpose/headers.hpp>
 #include <opencv2/opencv.hpp>
 #include <iostream>
