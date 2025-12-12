@@ -8,3 +8,18 @@
 // Used after:
 //  - FittingOptimizer (baseline visualization)
 //  - TemporalSmoother (smoothed final output)
+
+
+#pragma once
+#include <opencv2/opencv.hpp>
+
+
+class Visualization {
+public:
+    Visualization(int width, int height, double fps);
+
+    void write(const cv::Mat& frame);
+
+private:
+    cv::VideoWriter writer;
+};

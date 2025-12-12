@@ -1,6 +1,7 @@
 // main.cpp
 // ---------
 // Pipeline entry point.
+// This only orchestrates the modules; all logic lives in separate classes.
 // Steps:
 //  1) Load video frames (VideoLoader)
 //  2) Extract 2D joints using OpenPose (PoseDetector)
@@ -8,7 +9,8 @@
 //  4) Apply temporal smoothing (TemporalSmoother)
 //  5) Visualize or export results (Visualization)
 
-
+//TODO : REMOVE THIS COMMENTED CODE IF EVERYTING IS WORKING RIGHT
+/***
 #include <openpose/headers.hpp>
 #include <opencv2/opencv.hpp>
 #include <iostream>
@@ -114,5 +116,66 @@ int main(int argc, char *argv[])
     
     std::cout << "Output video saved to './build/output.avi'" << std::endl;
 
+    return 0;
+}
+
+*///
+
+
+#include "VideoLoader.h"
+#include "PoseDetector.h"
+#include "Visualization.h"
+
+#include <iostream>
+
+int main(int argc, char* argv[])
+{
+    if (argc < 2) {
+        std::cout << "Usage: " << argv[0] << " <video_path>\n"; // expects a video path as parameter
+        return 1;
+    }
+
+    std::string videoPath = argv[1];
+
+    // Load video
+    VideoLoader loader(videoPath);
+    if (!loader.isOpen()) {
+        std::cerr << "Error: Cannot open video.\n";
+        return 1;
+    }
+
+    // Setup OpenPose wrapper
+    PoseDetector poseDetector;
+
+    // Setup output video writer
+    Visualization visualizer(loader.width(), loader.height(), loader.fps());
+
+    long frameCounter = 0;
+    cv::Mat frame;
+
+    while (loader.readFrame(frame)) {
+
+        frameCounter++;
+
+        // During initial development let's work with a small range of frames.
+        int startFrame = 800;
+        int endFrame   = 801;
+
+        if (frameCounter < startFrame) continue;
+        if (frameCounter >= endFrame) break;
+
+        std::cout << "Processing frame " << frameCounter << "\n";
+
+        // Extract pose keypoints
+        auto keypoints = poseDetector.detect(frame);
+
+        // (Later: store keypoints → fit SMPL → smooth)
+        // For now: pure debugging output
+
+        // Write output frame
+        visualizer.write(frame);  // currently just original frame
+    }
+
+    std::cout << "Output written to output.avi\n";
     return 0;
 }

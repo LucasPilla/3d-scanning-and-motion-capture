@@ -1,10 +1,25 @@
 // VideoLoader
 // ------------
-// Loads an RGB video from disk and provides sequential frame access.
-// Responsibilities:
-//  - Open input video file
-//  - Extract frames one-by-one
-//  - Optionally downsample (skip frames for faster processing)
-//  - Convert frames to OpenCV Mat format
-// Used by:
-//  - PoseDetector (which runs OpenPose on each frame)
+// - Responsible ONLY for reading frames from a video.
+// - Hides OpenCV's VideoCapture from the rest of the system.
+
+
+#pragma once
+#include <opencv2/opencv.hpp>
+#include <string>
+
+
+class VideoLoader {
+public:
+    VideoLoader(const std::string& path);
+
+    bool isOpen() const;
+    bool readFrame(cv::Mat& frame);
+
+    double fps() const;
+    int width() const;
+    int height() const;
+
+private:
+    cv::VideoCapture cap;
+};
