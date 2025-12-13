@@ -6,8 +6,9 @@
 //  1) Load video frames (VideoLoader)
 //  2) Extract 2D joints using OpenPose (PoseDetector)
 //  3) Fit SMPL to each frame (FittingOptimizer)
-//  4) Apply temporal smoothing (TemporalSmoother)
-//  5) Visualize or export results (Visualization)
+//     - baseline: per-frame fitting only
+//     - final method: temporal regularization during optimization (see TemporalSmoother)
+//  4) Visualize or export results (Visualization)
 
 //TODO : REMOVE THIS COMMENTED CODE IF EVERYTING IS WORKING RIGHT
 /***
@@ -125,6 +126,8 @@ int main(int argc, char *argv[])
 #include "VideoLoader.h"
 #include "PoseDetector.h"
 #include "Visualization.h"
+#include "FittingOptimizer.h"
+#include "TemporalSmoother.h"
 
 #include <iostream>
 
@@ -150,6 +153,16 @@ int main(int argc, char* argv[])
     // Setup output video writer
     Visualization visualizer(loader.width(), loader.height(), loader.fps());
 
+    // Placeholder SMPL fitting + temporal smoothing.
+    // Configure fitting options (flags).
+    FittingOptimizer::Options fitOpts;
+    fitOpts.temporalRegularization = false;   // TODO: enable for proposed method
+    fitOpts.warmStarting           = true;
+    fitOpts.freezeShapeParameters  = false;
+
+    // TODO: Replace nullptr with a real SMPLModel instance once it is implemented.
+    FittingOptimizer fitter(nullptr, fitOpts);
+
     long frameCounter = 0;
     cv::Mat frame;
 
@@ -158,8 +171,8 @@ int main(int argc, char* argv[])
         frameCounter++;
 
         // During initial development let's work with a small range of frames.
-        int startFrame = 800;
-        int endFrame   = 801;
+        int startFrame = 1;
+        int endFrame   = 100;
 
         if (frameCounter < startFrame) continue;
         if (frameCounter >= endFrame) break;
@@ -169,8 +182,14 @@ int main(int argc, char* argv[])
         // Extract pose keypoints
         auto keypoints = poseDetector.detect(frame);
 
-        // (Later: store keypoints → fit SMPL → smooth)
-        // For now: pure debugging output
+        // Wrap keypoints into Pose2D for fitting.
+        Pose2D pose2D;
+        pose2D.keypoints = keypoints;
+        fitter.fitFrame(pose2D);
+
+        // TODO:
+        //  - Collect pose/shape params over all frames.
+        //  - After the sequence, pass them through TemporalSmoother.
 
         // Write output frame
         visualizer.write(frame);  // currently just original frame

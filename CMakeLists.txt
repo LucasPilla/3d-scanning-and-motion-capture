@@ -14,7 +14,18 @@ find_package(OpenCV REQUIRED)
 find_package(OpenPose REQUIRED)
 
 # Add executable
-add_executable(pipeline src/main.cpp)
+add_executable(pipeline
+    src/main.cpp
+    src/VideoLoader.cpp
+    src/PoseDetector.cpp
+    src/Visualization.cpp
+    src/FittingOptimizer.cpp
+    src/TemporalSmoother.cpp
+)
+
+target_include_directories(pipeline PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
 
 # Link libraries
 target_link_libraries(pipeline
