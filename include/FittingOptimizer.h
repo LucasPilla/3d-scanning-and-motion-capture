@@ -8,3 +8,93 @@
 //  - Run optimization for each frame
 // Used by:
 //  - TemporalSmoother (after all per-frame fits are computed)
+
+#pragma once
+
+#include <vector>
+
+// TODO: Implement SMPLModel in SMPLModel.h / SMPLModel.cpp
+class SMPLModel;
+
+// Lightweight container for 2D keypoints of a single frame
+//
+// Semantics:
+//  - Represents a single selected person (highest-confidence) from OpenPose
+//  - Joints are in OpenPose's body-part order (e.g., BODY_25)
+//  - Layout: [x0, y0, score0, x1, y1, score1, ...] for all body parts
+//  - Joints with very low confidence may be zeroed out (x = y = score = 0)
+//
+// TODO:
+//  - Define and document the exact mapping between OpenPose joint indices
+//    and the SMPL joint indices used in the optimizer
+//  - Potentially switch to a more structured representation
+//    (per-joint struct with name, position, and confidence)
+struct Pose2D
+{
+    std::vector<float> keypoints;
+};
+
+// Interface for SMPL fitting (no optimization)
+//
+// This class will later own the Ceres problem setup and perform SMPLify-style optimization per frame
+class FittingOptimizer
+{
+public:
+    // Configuration flags controlling advanced features
+    // These correspond to the proposal:
+    //  - TEMPORAL_REGULARIZATION
+    //  - WARM_STARTING
+    //  - FREEZE_SHAPE_PARAMETERS
+    struct Options {
+        bool temporalRegularization   = false;
+        bool warmStarting             = true;
+        bool freezeShapeParameters    = false;
+    };
+
+    explicit FittingOptimizer(SMPLModel* smplModel,
+                              const Options& options);
+
+    // Fit SMPL parameters to a single frame of 2D joints
+    //
+    // NOTE: In this step, this function will not run any optimization
+    // It will just prepare data & placeholders
+    void fitFrame(const Pose2D& observation);
+
+    // TODO: Add getters to retrieve the fitted pose/shape
+    // for the last processed frame, e.g.:
+    //   const std::vector<double>& getPoseParams() const;
+    //   const std::vector<double>& getShapeParams() const;
+
+private:
+    // Configuration flags (see Options above).
+    Options options;
+
+    // ---------- Stored data ----------
+
+    // 2D joints for the current frame
+    Pose2D current2DJoints; // TODO: extend to support sequences if needed
+
+    // SMPL pose parameters (e.g., 72-dim axis-angle)
+    std::vector<double> poseParams;
+
+    // SMPL shape parameters (e.g., 10 betas)
+    std::vector<double> shapeParams;
+
+    // Pointer to SMPL model used for projecting 3D joints
+    SMPLModel* smplModel = nullptr;
+
+    // ---------- Ceres preparation hooks (no implementation yet) ----------
+
+    // TODO: Build the Ceres problem for the current frame (create residuals, etc.)
+    void buildProblemForCurrentFrame();
+
+    // TODO: Add reprojection error residuals (2D joints vs projected SMPL joints)
+    void addReprojectionTerms();
+
+    // TODO: Add pose/shape priors and regularization terms
+    void addPriorTerms();
+
+    // TODO: Add temporal regularization terms (smoothing during optimization),
+    // potentially using TemporalSmoother utilities.
+    void addTemporalRegularizationTerms();
+};

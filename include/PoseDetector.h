@@ -15,7 +15,9 @@
 
 // Wraps the OpenPose API
 // Input: OpenCV frame
-// Output: flat vector of keypoint floats [x,y,score,...]
+// Output: flat vector of keypoint floats [x0,y0,score0, x1,y1,score1, ...]
+//         for a single selected person (highest-confidence), in OpenPose's
+//         body-part order. Joints with very low confidence are zeroed out.
 
 class PoseDetector {
 public:
