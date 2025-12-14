@@ -2,37 +2,22 @@
 // -----------------
 // Performs non-linear optimization (SMPLify-style) to fit SMPL parameters
 // to 2D OpenPose detections using Ceres Solver.
+
 // Responsibilities:
 //  - Define cost functions for joint reprojection
 //  - Initialize pose & shape
 //  - Run optimization for each frame
+
 // Used by:
-//  - TemporalSmoother (after all per-frame fits are computed)
+//  - Visualization
 
 #pragma once
 
 #include <vector>
+#include "PoseDetector.h"
 
 // TODO: Implement SMPLModel in SMPLModel.h / SMPLModel.cpp
 class SMPLModel;
-
-// Lightweight container for 2D keypoints of a single frame
-//
-// Semantics:
-//  - Represents a single selected person (highest-confidence) from OpenPose
-//  - Joints are in OpenPose's body-part order (e.g., BODY_25)
-//  - Layout: [x0, y0, score0, x1, y1, score1, ...] for all body parts
-//  - Joints with very low confidence may be zeroed out (x = y = score = 0)
-//
-// TODO:
-//  - Define and document the exact mapping between OpenPose joint indices
-//    and the SMPL joint indices used in the optimizer
-//  - Potentially switch to a more structured representation
-//    (per-joint struct with name, position, and confidence)
-struct Pose2D
-{
-    std::vector<float> keypoints;
-};
 
 // Interface for SMPL fitting (no optimization)
 //
@@ -47,7 +32,7 @@ public:
     //  - FREEZE_SHAPE_PARAMETERS
     struct Options {
         bool temporalRegularization   = false;
-        bool warmStarting             = true;
+        bool warmStarting             = false;
         bool freezeShapeParameters    = false;
     };
 
