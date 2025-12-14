@@ -21,14 +21,14 @@ FittingOptimizer::FittingOptimizer(SMPLModel* smplModel_,
                                     const Options& options_)
     : options(options_), smplModel(smplModel_)
 {
-// TODO: Confirm the dimensionality of SMPL parameters for this project
-// Typical SMPL uses:
-//   - 72 pose parameters (24 joints * 3 axis-angle)
-//   - 10 shape parameters (betas)
-//
-// For now, initialize with reasonable defaults (all zeros)
-poseParams.assign(72, 0.0);
-shapeParams.assign(10, 0.0);
+    // TODO: Confirm the dimensionality of SMPL parameters for this project
+    // Typical SMPL uses:
+    //   - 72 pose parameters (24 joints * 3 axis-angle)
+    //   - 10 shape parameters (betas)
+    //
+    // For now, initialize with reasonable defaults (all zeros)
+    poseParams.assign(72, 0.0);
+    shapeParams.assign(10, 0.0);
 }
 
 void FittingOptimizer::fitFrame(const Pose2D& observation)
