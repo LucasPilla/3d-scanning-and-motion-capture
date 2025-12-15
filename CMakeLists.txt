@@ -13,6 +13,9 @@ find_package(OpenCV REQUIRED)
 # OpenPose
 find_package(OpenPose REQUIRED)
 
+# Eigen (header-only)
+find_package(Eigen3 REQUIRED)
+
 # Add executable
 add_executable(pipeline
     src/main.cpp
@@ -21,10 +24,12 @@ add_executable(pipeline
     src/Visualization.cpp
     src/FittingOptimizer.cpp
     src/TemporalSmoother.cpp
+    src/SMPLModel.cpp
 )
 
 target_include_directories(pipeline PRIVATE
     ${CMAKE_SOURCE_DIR}/include
+    ${EIGEN3_INCLUDE_DIRS}
 )
 
 # Link libraries
