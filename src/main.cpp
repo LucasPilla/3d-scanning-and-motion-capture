@@ -14,6 +14,7 @@
 #include "Visualization.h"
 #include "FittingOptimizer.h"
 #include "TemporalSmoother.h"
+#include "SMPLModel.h" 
 
 #include <iostream>
 
@@ -34,6 +35,17 @@ int main(int argc, char* argv[])
 
     // Setup output video writer
     Visualization visualizer(loader.width(), loader.height(), loader.fps());
+
+    // Load SMPL model (preprocessed JSON).
+    // NOTE: Adjust this path to wherever your teammate writes the JSON,
+    // e.g. "models/smpl_male.json" created by preprocess.py.
+    SMPLModel smplModel;
+    const std::string smplJsonPath = "models/smpl_male.json"; // TODO: confirm path with team
+
+    if (!smplModel.loadFromJson(smplJsonPath)) {
+        std::cerr << "Warning: Failed to load SMPL model from " << smplJsonPath
+                << ". Fitting will not use a real model yet.\n";
+    }
 
     // Placeholder SMPL fitting + temporal smoothing.
     // Configure fitting options (flags).

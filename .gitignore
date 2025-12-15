@@ -45,3 +45,15 @@ build
 
 # VS code
 .DS_Store
+
+# Python virtual environments
+venv/
+venv-smpl/
+.env/
+.venv/
+
+# SMPL model data 
+models/smpl_*.json
+models/smpl_*.npz
+models/*.npz
+models/*.pkl
