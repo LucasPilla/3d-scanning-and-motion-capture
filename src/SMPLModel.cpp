@@ -149,6 +149,70 @@ void SMPLModel::setShape(const std::vector<double>& shapeParams)
     }
 }
 
+//For pose blend shapes
+Eigen::Matrix3f SMPLModel::rodrigues(const Eigen::Vector3f& r) const
+{
+    float theta = r.norm();
+    if (theta < 1e-8f) {
+        return Eigen::Matrix3f::Identity();
+    }
+
+    Eigen::Vector3f k = r / theta;
+
+    Eigen::Matrix3f K;
+    K <<     0, -k.z(),  k.y(),
+          k.z(),     0, -k.x(),
+         -k.y(),  k.x(),     0;
+
+    return Eigen::Matrix3f::Identity()
+         + std::sin(theta) * K
+         + (1 - std::cos(theta)) * (K * K);
+}
+
+//For joint regression
+Eigen::MatrixXf SMPLModel::computeJoints(const Eigen::MatrixXf& vertices) const
+{
+    // jointRegressor_: (24, N)
+    // vertices: (N, 3)
+    return jointRegressor_ * vertices;
+}
+
+//For forward kinematics
+std::vector<Eigen::Matrix4f> SMPLModel::computeGlobalTransforms( const Eigen::MatrixXf& J, const std::vector<Eigen::Matrix3f>& rotations) const
+{
+    const int numJoints = static_cast<int>(rotations.size());
+    std::vector<Eigen::Matrix4f> G(numJoints);
+
+    // kinematic tree: parents are in row 0
+    Eigen::VectorXi parents = kinematicTree_.row(0);
+
+    // Root
+    G[0].setIdentity();
+    G[0].block<3,3>(0,0) = rotations[0];
+    G[0].block<3,1>(0,3) = J.row(0).transpose();
+
+    for (int i = 1; i < numJoints; ++i) {
+        int p = parents(i);
+
+        Eigen::Matrix4f T = Eigen::Matrix4f::Identity();
+        T.block<3,3>(0,0) = rotations[i];
+        T.block<3,1>(0,3) = (J.row(i) - J.row(p)).transpose();
+
+        G[i] = G[p] * T;
+    }
+
+    // Remove rest pose
+    for (int i = 0; i < numJoints; ++i) {
+        Eigen::Matrix4f rest = Eigen::Matrix4f::Identity();
+        rest.block<3,1>(0,3) = -J.row(i).transpose();
+        G[i] = G[i] * rest;
+    }
+
+    return G;
+}
+
+
+
 SMPLMesh SMPLModel::getMesh() const
 {
     SMPLMesh mesh;
@@ -158,25 +222,68 @@ SMPLMesh SMPLModel::getMesh() const
         return mesh;
     }
 
-    const int numVertices = static_cast<int>(templateVertices_.rows());
-    const int numFaces    = static_cast<int>(faces_.rows());
+    const int N = templateVertices_.rows();
+    const int numJoints = jointRegressor_.rows();
 
-    mesh.vertices.reserve(numVertices);
-    for (int i = 0; i < numVertices; ++i) {
-        mesh.vertices.emplace_back(
-            templateVertices_(i, 0),
-            templateVertices_(i, 1),
-            templateVertices_(i, 2)
-        );
+
+    // 1. Shape blend shapes
+    Eigen::VectorXf beta = shapeParams_;
+    Eigen::MatrixXf v_shaped = templateVertices_;
+
+    if (beta.size() > 0) {
+        Eigen::VectorXf shape_offset = shapeBlendShapes_ * beta;
+        v_shaped += Eigen::Map<Eigen::MatrixXf>(shape_offset.data(), N, 3);
     }
 
-    mesh.faces.reserve(numFaces);
-    for (int i = 0; i < numFaces; ++i) {
-        mesh.faces.emplace_back(
-            faces_(i, 0),
-            faces_(i, 1),
-            faces_(i, 2)
-        );
+    // 2. Joint regression
+    Eigen::MatrixXf J = computeJoints(v_shaped);
+
+
+    // 3. Pose blend shapes
+    std::vector<Eigen::Matrix3f> rotations(numJoints);
+    for (int i = 0; i < numJoints; ++i) {
+        Eigen::Vector3f r = poseParams_.segment<3>(3 * i);
+        rotations[i] = rodrigues(r);
+    }
+
+    Eigen::VectorXf pose_map((numJoints - 1) * 9);
+    for (int i = 1; i < numJoints; ++i) {
+        Eigen::Matrix3f diff = rotations[i] - Eigen::Matrix3f::Identity();
+        Eigen::Map<Eigen::VectorXf>(pose_map.data() + (i - 1) * 9, 9) =
+            Eigen::Map<Eigen::VectorXf>(diff.data(), 9);
+    }
+
+    Eigen::MatrixXf v_posed = v_shaped;
+    Eigen::VectorXf pose_offset = poseBlendShapes_ * pose_map;
+    v_posed += Eigen::Map<Eigen::MatrixXf>(pose_offset.data(), N, 3);
+
+    // 4. Forward kinematics
+    auto G = computeGlobalTransforms(J, rotations);
+
+    // 5. Linear Blend Skinning
+    Eigen::MatrixXf v_final(N, 3);
+
+    for (int i = 0; i < N; ++i) {
+        Eigen::Vector4f v_homo(v_posed(i,0), v_posed(i,1), v_posed(i,2), 1.0f);
+        Eigen::Vector4f v_sum = Eigen::Vector4f::Zero();
+
+        for (int j = 0; j < numJoints; ++j) {
+            float w = weights_(i, j);
+            v_sum += w * (G[j] * v_homo);
+        }
+
+        v_final.row(i) = v_sum.head<3>().transpose();
+    }
+
+    // Output mesh
+    mesh.vertices.reserve(N);
+    for (int i = 0; i < N; ++i) {
+        mesh.vertices.emplace_back(v_final(i,0), v_final(i,1), v_final(i,2));
+    }
+
+    mesh.faces.reserve(faces_.rows());
+    for (int i = 0; i < faces_.rows(); ++i) {
+        mesh.faces.emplace_back(faces_(i,0), faces_(i,1), faces_(i,2));
     }
 
     return mesh;
