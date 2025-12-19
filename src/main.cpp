@@ -47,7 +47,10 @@ int main(int argc, char* argv[])
                 << ". Fitting will not use a real model yet.\n";
     }
 
-    // SMPL sanity test ------------------------------------------
+    /*
+
+    //Will be used to test after we load the model
+    // 1 - SMPL sanity test ------------------------------------------
     std::vector<double> zeroPose(72, 0.0);
     std::vector<double> zeroShape(10, 0.0);
 
@@ -59,7 +62,14 @@ int main(int argc, char* argv[])
     std::cout << "SMPL test mesh: "
             << testMesh.vertices.size() << " vertices, "
             << testMesh.faces.size() << " faces\n";
+
+    //Expected output:
+    //SMPLModel::loadFromJson - loaded model
+    //SMPL test mesh: 6890 vertices, 13776 faces
     //----------------------------------------------------------    
+
+    //Also more sanity checks later
+    */
 
     // Placeholder SMPL fitting + temporal smoothing.
     // Configure fitting options (flags).
