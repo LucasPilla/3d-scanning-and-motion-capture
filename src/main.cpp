@@ -20,6 +20,10 @@
 
 int main(int argc, char* argv[])
 {
+    // OpenPose mode. Toggle here. 
+    // True if precomputed keypoints to be used. False if live OpenPose detection to be used.
+    bool usePrecomputed = true;
+
     if (argc < 2) {
         std::cout << "Usage: " << argv[0] << " <video_path>\n"; // expects a video path as parameter
         return 1;
@@ -31,7 +35,15 @@ int main(int argc, char* argv[])
     VideoLoader loader(videoPath);
 
     // Setup OpenPose wrapper
-    PoseDetector poseDetector;
+    PoseDetector poseDetector(
+        usePrecomputed ? PoseSource::Precomputed
+                    : PoseSource::OpenPoseLive
+    );
+
+    if (usePrecomputed) {
+        poseDetector.loadKeypoints("keypoints.json");
+    }
+
 
     // Setup output video writer
     Visualization visualizer(loader.width(), loader.height(), loader.fps());
@@ -88,12 +100,14 @@ int main(int argc, char* argv[])
 
         frameCounter++;
 
+        /*
         // During initial development let's work with a small range of frames.
         int startFrame = 1;
         int endFrame   = 100;
 
         if (frameCounter < startFrame) continue;
         if (frameCounter >= endFrame) break;
+        */
 
         std::cout << "Processing frame " << frameCounter << "\n";
 

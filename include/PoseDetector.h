@@ -12,8 +12,11 @@
 #include <openpose/headers.hpp>
 #include <opencv2/opencv.hpp>
 #include <vector>
+#include <memory>
+#include <unordered_map>
+#include <string>
 
-// Represents a 2D keypoint with position and confidence score
+ // Represents a 2D keypoint with position and confidence score
 struct Point2D
 {
     float x = 0.0;     
@@ -27,16 +30,42 @@ struct Pose2D
     std::vector<Point2D> keypoints;
 };
 
+/**
+ * Defines where pose keypoints come from.
+ * - OpenPoseLive: run OpenPose per frame (slow)
+ * - Precomputed: load joints from JSON (fast)
+ */
+ enum class PoseSource {
+    OpenPoseLive,
+    Precomputed
+ };
+
 // Wraps the OpenPose API
 // Input: OpenCV frame
 // Output: 2D pose for a single person (highest-confidence). 
 //         Joints with very low confidence are zeroed out.
 class PoseDetector {
 public:
-    PoseDetector();
+    // Constructor selects mode
+    explicit PoseDetector(PoseSource source);
 
-    Pose2D detect(const cv::Mat& frame);
+    // Load keypoints for Precomputed mode
+    bool loadKeypoints(const std::string& jsonPath);
+
+    /**
+     * Detect or retrieve keypoints for a frame.
+     * @param frame     Current video frame (ignored in Precomputed mode)
+     * @param frameIdx  Frame index (used to lookup keypoints)
+     */
+    Pose2D detect(const cv::Mat& frame, int frameIdx);
 
 private:
-    std::unique_ptr<op::Wrapper> wrapper;
+    PoseSource source_;
+
+    // Precomputed mode
+    // frame index -> list of 2D joints (x,y)
+    std::unordered_map<int, Pose2D> cachedPoses_;
+
+    // OpenPose live mode
+    std::unique_ptr<op::Wrapper> openpose_;
 };
