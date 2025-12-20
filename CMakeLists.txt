@@ -38,3 +38,17 @@ target_link_libraries(pipeline
     ${OpenPose_LIBS}                    
 )
 
+
+add_executable(extract_keypoints
+    tools/extract_keypoints.cpp
+)
+
+target_link_libraries(extract_keypoints
+    ${OpenCV_LIBS}
+    openpose
+)
+
+target_include_directories(extract_keypoints PRIVATE
+    include
+)
+
