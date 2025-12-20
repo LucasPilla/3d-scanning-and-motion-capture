@@ -37,7 +37,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    // ---------------- Configure OpenPose ----------------
+    // Configure OpenPose
     // We disable rendering because we only need keypoints
     op::WrapperStructPose poseConfig;
     poseConfig.modelFolder = "/opt/openpose/models/";
@@ -56,8 +56,6 @@ int main(int argc, char** argv)
 
     // Process video frame-by-frame
     while (cap.read(frame)) {
-        frameIdx++;
-
         // Convert OpenCV image to OpenPose format
         auto input = OP_CV2OPCONSTMAT(frame);
 
@@ -66,32 +64,31 @@ int main(int argc, char** argv)
 
         // Skip frames with no detection
         if (!datum || datum->empty()) {
+            frameIdx++;
             continue;
         }
 
         // Access detected pose keypoints
         const auto& keypoints = datum->at(0)->poseKeypoints;
 
-        // Only store the most confident detected person
-        if (keypoints.getSize(0) > 0) {
+        int numJoints = keypoints.getSize(1);
+        nlohmann::json joints = nlohmann::json::array();
 
-            nlohmann::json joints;
-            int numParts = keypoints.getSize(1);
+        // Iterate over body joints
+        for (int j = 0; j < numJoints; j++) {
+            int idx = 3 * j;
 
-            // Iterate over body joints
-            for (int j = 0; j < numParts; j++) {
-                int idx = 3 * j;
-
-                joints.push_back({
-                    {"x",     keypoints[idx]},
-                    {"y",     keypoints[idx + 1]},
-                    {"score", keypoints[idx + 2]} //confidence score
-                });
-            }
-
-            // Store joints under frame index
-            allFrames[std::to_string(frameIdx)] = joints;
+            joints.push_back({
+                {"x",     keypoints[idx]},
+                {"y",     keypoints[idx + 1]},
+                {"score", keypoints[idx + 2]} //confidence score
+            });
         }
+
+        // Store joints under frame index
+        allFrames[std::to_string(frameIdx)] = joints;
+        frameIdx++;
+    }
 
         std::cout << "Processed frame " << frameIdx << "\n";
     }
