@@ -88,7 +88,6 @@ int main(int argc, char** argv)
         // Store joints under frame index
         allFrames[std::to_string(frameIdx)] = joints;
         frameIdx++;
-    }
 
         std::cout << "Processed frame " << frameIdx << "\n";
     }

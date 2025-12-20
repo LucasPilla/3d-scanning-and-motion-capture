@@ -93,12 +93,12 @@ int main(int argc, char* argv[])
     // TODO: Replace nullptr with a real SMPLModel instance once it is implemented.
     FittingOptimizer fitter(nullptr, fitOpts);
 
-    long frameCounter = 0;
+    int frameIdx = 0;
     cv::Mat frame;
 
     while (loader.readFrame(frame)) {
 
-        frameCounter++;
+        frameIdx++;
 
         /*
         // During initial development let's work with a small range of frames.
@@ -109,10 +109,10 @@ int main(int argc, char* argv[])
         if (frameCounter >= endFrame) break;
         */
 
-        std::cout << "Processing frame " << frameCounter << "\n";
+        std::cout << "Processing frame " << frameIdx << "\n";
 
         // Extract pose
-        Pose2D pose2D = poseDetector.detect(frame);
+        Pose2D pose2D = poseDetector.detect(frame, frameIdx);
 
         // Run optimizer
         // The proposed enhacements for temporal consistency are applied within the optimizer.
