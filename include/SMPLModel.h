@@ -67,7 +67,7 @@ public:
 
     // Get the current mesh.
     //
-    // For this week:
+    // For first week:
     //   - This will simply return the template mesh (no pose/shape deformation yet).
     //   - Later, it will apply shape & pose blendshapes and skinning.
     SMPLMesh getMesh() const;
@@ -96,6 +96,8 @@ private:
     // Joint regressor: (numJoints, numVertices)
     MatrixXf jointRegressor_;
 
+    MatrixXf weights_;            // (N, 24)
+    MatrixXi kinematicTree_;      // (2, 24)
     // --------- Current parameters ---------
 
     // Current pose & shape parameters (stored only for now).
@@ -103,4 +105,19 @@ private:
     Eigen::VectorXf shapeParams_;  // e.g. size 10
 
     bool loaded_ = false;
+
+    // --- SMPL internal helpers ---
+
+    // Rodrigues rotation: axis-angle (3,) → rotation matrix (3x3)
+    Eigen::Matrix3f rodrigues(const Eigen::Vector3f& r) const;
+
+    // Compute joint locations from vertices
+    Eigen::MatrixXf computeJoints(const Eigen::MatrixXf& vertices) const;
+
+    // Compute global joint transforms (4x4 matrices)
+    std::vector<Eigen::Matrix4f> computeGlobalTransforms(
+        const Eigen::MatrixXf& J,
+        const std::vector<Eigen::Matrix3f>& rotations
+    ) const;
+
 };
