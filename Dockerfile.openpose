@@ -1,0 +1,44 @@
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ---- system deps ----
+RUN apt-get update && apt-get install -y \
+    git cmake build-essential pkg-config \
+    libopencv-dev \
+    libgoogle-glog-dev libgflags-dev \
+    libatlas-base-dev \
+    libprotobuf-dev protobuf-compiler \
+    libhdf5-dev \
+    libboost-system-dev \
+    libboost-thread-dev \
+    libboost-filesystem-dev \
+    libboost-serialization-dev \
+    libboost-chrono-dev \
+    wget unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# ---- OpenPose ----
+WORKDIR /opt
+RUN git clone https://github.com/CMU-Perceptual-Computing-Lab/openpose.git
+WORKDIR /opt/openpose
+RUN git submodule update --init --recursive
+
+# ---- build OpenPose with CUDA ----
+RUN mkdir build && cd build && \
+    cmake .. \
+      -DBUILD_PYTHON=OFF \
+      -DBUILD_EXAMPLES=ON \
+      -DUSE_CUDA=ON \
+      -DUSE_CUDNN=ON \
+      -DCUDA_ARCH_BIN=8.6 \
+      -DCUDA_ARCH_PTX="" \
+      -DBoost_NO_SYSTEM_PATHS=OFF \
+      -DBOOST_ROOT=/usr \
+      -DBoost_INCLUDE_DIR=/usr/include \
+      -DBoost_LIBRARY_DIR=/usr/lib/x86_64-linux-gnu && \
+    make -j4
+
+
+WORKDIR /usr/src/project

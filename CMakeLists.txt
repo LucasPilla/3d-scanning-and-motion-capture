@@ -16,6 +16,10 @@ find_package(OpenPose REQUIRED)
 # Eigen (header-only)
 find_package(Eigen3 REQUIRED)
 
+#Threads for GPU
+find_package(Threads REQUIRED)
+
+
 # Add executable
 add_executable(pipeline
     src/main.cpp
@@ -36,5 +40,19 @@ target_include_directories(pipeline PRIVATE
 target_link_libraries(pipeline
     ${OpenCV_LIBS}  
     ${OpenPose_LIBS}                    
+)
+
+
+add_executable(extract_keypoints
+    tools/extract_keypoints.cpp
+)
+
+target_link_libraries(extract_keypoints
+    ${OpenCV_LIBS}
+    openpose
+)
+
+target_include_directories(extract_keypoints PRIVATE
+    include
 )
 
