@@ -16,6 +16,10 @@ find_package(OpenPose REQUIRED)
 # Eigen (header-only)
 find_package(Eigen3 REQUIRED)
 
+#Threads for GPU
+find_package(Threads REQUIRED)
+
+
 # Add executable
 add_executable(pipeline
     src/main.cpp
