@@ -1,4 +1,0 @@
-/usr/src/project/build_gpu/CMakeFiles/pipeline.dir
-/usr/src/project/build_gpu/CMakeFiles/extract_keypoints.dir
-/usr/src/project/build_gpu/CMakeFiles/edit_cache.dir
-/usr/src/project/build_gpu/CMakeFiles/rebuild_cache.dir
