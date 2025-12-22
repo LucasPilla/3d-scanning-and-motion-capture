@@ -60,5 +60,8 @@ Optional arguments:
 Example:
 
 ```bash
-./pipeline --video-path sample.avi --smpl-path models/smpl_female.json 
+./pipeline \
+  --video-path ../data/sample.avi \
+  --smpl-path ../models/smpl_female.json \
+  --precomputed-keypoints ../data/keypoints.json
 ```
