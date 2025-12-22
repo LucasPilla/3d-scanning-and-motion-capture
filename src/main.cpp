@@ -118,6 +118,10 @@ int main(int argc, char* argv[])
         // The proposed enhacements for temporal consistency are applied within the optimizer.
         fitter.fitFrame(pose2D);
 
+        // After fitting...
+        SMPLMesh currentMesh = smplModel.getMesh();
+        visualizer.exportMesh(currentMesh, frameIdx);
+
         // Write output frame
         visualizer.drawKeypoints(frame, pose2D.keypoints);
         visualizer.write(frame);  // currently just original frame
