@@ -8,19 +8,18 @@
 //  3) Fit SMPL to each frame (FittingOptimizer)
 //  4) Visualize or export results (Visualization)
 
-
 #include "VideoLoader.h"
 #include "PoseDetector.h"
 #include "Visualization.h"
 #include "FittingOptimizer.h"
 #include "TemporalSmoother.h"
-#include "SMPLModel.h" 
+#include "SMPLModel.h"
 
 #include <iostream>
 
 int main(int argc, char* argv[])
 {
-    // OpenPose mode. Toggle here. 
+    // OpenPose mode. Toggle here.
     // True if precomputed keypoints to be used. False if live OpenPose detection to be used.
     bool usePrecomputed = true;
 
@@ -37,51 +36,39 @@ int main(int argc, char* argv[])
     // Setup OpenPose wrapper
     PoseDetector poseDetector(
         usePrecomputed ? PoseSource::Precomputed
-                    : PoseSource::OpenPoseLive
+                       : PoseSource::OpenPoseLive
     );
 
     if (usePrecomputed) {
         poseDetector.loadKeypoints("keypoints.json");
     }
 
-
     // Setup output video writer
     Visualization visualizer(loader.width(), loader.height(), loader.fps());
 
     // Load SMPL model (preprocessed JSON).
-    // NOTE: Adjust this path to wherever your teammate writes the JSON,
-    // e.g. "models/smpl_male.json" created by preprocess.py.
+    // "models/smpl_male.json" is created by scripts/preprocess.py.
     SMPLModel smplModel;
-    const std::string smplJsonPath = "models/smpl_male.json"; // TODO: confirm path with team
+    const std::string smplJsonPath = "models/smpl_male.json";
 
     if (!smplModel.loadFromJson(smplJsonPath)) {
         std::cerr << "Warning: Failed to load SMPL model from " << smplJsonPath
-                << ". Fitting will not use a real model yet.\n";
+                  << ". Fitting will not use a real model yet.\n";
     }
 
-    /*
+    // Set dummy SMPL parameters for now: zero pose (72) and zero shape (10)
+    if (smplModel.isLoaded()) {
+        std::vector<double> dummyPose(72, 0.0);
+        std::vector<double> dummyShape(10, 0.0);
+        smplModel.setPose(dummyPose);
+        smplModel.setShape(dummyShape);
 
-    //Will be used to test after we load the model
-    // 1 - SMPL sanity test ------------------------------------------
-    std::vector<double> zeroPose(72, 0.0);
-    std::vector<double> zeroShape(10, 0.0);
-
-    smplModel.setPose(zeroPose);
-    smplModel.setShape(zeroShape);
-
-    SMPLMesh testMesh = smplModel.getMesh();
-
-    std::cout << "SMPL test mesh: "
-            << testMesh.vertices.size() << " vertices, "
-            << testMesh.faces.size() << " faces\n";
-
-    //Expected output:
-    //SMPLModel::loadFromJson - loaded model
-    //SMPL test mesh: 6890 vertices, 13776 faces
-    //----------------------------------------------------------    
-
-    //Also more sanity checks later
-    */
+        // Optional one-time sanity check
+        SMPLMesh testMesh = smplModel.getMesh();
+        std::cout << "Initial SMPL mesh: "
+                  << testMesh.vertices.size() << " vertices, "
+                  << testMesh.faces.size()    << " faces\n";
+    }
 
     // Placeholder SMPL fitting + temporal smoothing.
     // Configure fitting options (flags).
@@ -90,8 +77,8 @@ int main(int argc, char* argv[])
     fitOpts.warmStarting           = false;
     fitOpts.freezeShapeParameters  = false;
 
-    // TODO: Replace nullptr with a real SMPLModel instance once it is implemented.
-    FittingOptimizer fitter(nullptr, fitOpts);
+    // Use a real SMPLModel instance so the optimizer can access it later
+    FittingOptimizer fitter(&smplModel, fitOpts);
 
     int frameIdx = 0;
     cv::Mat frame;
@@ -100,27 +87,33 @@ int main(int argc, char* argv[])
 
         frameIdx++;
 
-        /*
-        // During initial development let's work with a small range of frames.
-        int startFrame = 1;
-        int endFrame   = 100;
-
-        if (frameCounter < startFrame) continue;
-        if (frameCounter >= endFrame) break;
-        */
-
+        // During initial development you can clamp the frame range if needed.
         std::cout << "Processing frame " << frameIdx << "\n";
 
         // Extract pose
         Pose2D pose2D = poseDetector.detect(frame, frameIdx);
 
-        // Run optimizer
-        // The proposed enhacements for temporal consistency are applied within the optimizer.
+        // Run optimizer (currently a stub, just prepares data)
+        // The proposed enhancements for temporal consistency are applied within the optimizer.
         fitter.fitFrame(pose2D);
+
+        // Trigger SMPL forward pass once per frame with the current (dummy) params
+        if (smplModel.isLoaded()) {
+            SMPLMesh frameMesh = smplModel.getMesh();
+
+            // Only print once to avoid spamming
+            if (frameIdx == 1) {
+                std::cout << "Per-frame SMPL mesh: "
+                          << frameMesh.vertices.size() << " vertices, "
+                          << frameMesh.faces.size()    << " faces\n";
+            }
+
+            // TODO (later): use frameMesh for visualization or analysis
+        }
 
         // Write output frame
         visualizer.drawKeypoints(frame, pose2D.keypoints);
-        visualizer.write(frame);  // currently just original frame
+        visualizer.write(frame);  // currently just original frame with 2D skeleton overlay
     }
 
     std::cout << "Output written to output.mp4\n";

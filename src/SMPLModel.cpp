@@ -122,6 +122,39 @@ bool SMPLModel::loadFromJson(const std::string& jsonPath)
                 jointRegressor_(jIdx, v) = static_cast<float>(jr[jIdx][v]);
             }
         }
+        // -------- weights (N, numJoints) --------
+        const auto& w = j.at("weights");
+        const int numWeightVerts = static_cast<int>(w.size());
+        const int numWeightJoints = static_cast<int>(w[0].size());
+
+        if (numWeightVerts != numVertices || numWeightJoints != numJoints) {
+            std::cerr << "SMPLModel::loadFromJson - invalid weights shape\n";
+            return false;
+        }
+
+        weights_.resize(numWeightVerts, numWeightJoints);
+        for (int v = 0; v < numWeightVerts; ++v) {
+            for (int k = 0; k < numWeightJoints; ++k) {
+                weights_(v, k) = static_cast<float>(w[v][k]);
+            }
+        }
+
+        // -------- kinematic_tree (2, numJoints) --------
+        const auto& kt = j.at("kinematic_tree");
+        const int ktRows = static_cast<int>(kt.size());
+        const int ktCols = static_cast<int>(kt[0].size());
+
+        if (ktRows != 2 || ktCols != numJoints) {
+            std::cerr << "SMPLModel::loadFromJson - invalid kinematic_tree shape\n";
+            return false;
+        }
+
+        kinematicTree_.resize(ktRows, ktCols);
+        for (int r = 0; r < ktRows; ++r) {
+            for (int c = 0; c < ktCols; ++c) {
+                kinematicTree_(r, c) = static_cast<int>(kt[r][c]);
+            }
+        }
 
     } catch (const std::exception& e) {
         std::cerr << "SMPLModel::loadFromJson - error while reading arrays: " << e.what() << "\n";
@@ -216,75 +249,47 @@ std::vector<Eigen::Matrix4f> SMPLModel::computeGlobalTransforms( const Eigen::Ma
 SMPLMesh SMPLModel::getMesh() const
 {
     SMPLMesh mesh;
+    if (!loaded_) return mesh;
 
-    if (!loaded_) {
-        // Return empty mesh if the model has not been loaded yet.
-        return mesh;
-    }
-
-    const int N = templateVertices_.rows();
+    const int N         = templateVertices_.rows();
     const int numJoints = jointRegressor_.rows();
 
-
-    // 1. Shape blend shapes
-    Eigen::VectorXf beta = shapeParams_;
+    // 1. Skip shape and pose offsets for now: just use template vertices
     Eigen::MatrixXf v_shaped = templateVertices_;
+    Eigen::MatrixXf v_posed  = v_shaped;
 
-    if (beta.size() > 0) {
-        Eigen::VectorXf shape_offset = shapeBlendShapes_ * beta;
-        v_shaped += Eigen::Map<Eigen::MatrixXf>(shape_offset.data(), N, 3);
-    }
-
-    // 2. Joint regression
+    // 2. Joint regression on template
     Eigen::MatrixXf J = computeJoints(v_shaped);
 
-
-    // 3. Pose blend shapes
-    std::vector<Eigen::Matrix3f> rotations(numJoints);
-    for (int i = 0; i < numJoints; ++i) {
-        Eigen::Vector3f r = poseParams_.segment<3>(3 * i);
-        rotations[i] = rodrigues(r);
-    }
-
-    Eigen::VectorXf pose_map((numJoints - 1) * 9);
-    for (int i = 1; i < numJoints; ++i) {
-        Eigen::Matrix3f diff = rotations[i] - Eigen::Matrix3f::Identity();
-        Eigen::Map<Eigen::VectorXf>(pose_map.data() + (i - 1) * 9, 9) =
-            Eigen::Map<Eigen::VectorXf>(diff.data(), 9);
-    }
-
-    Eigen::MatrixXf v_posed = v_shaped;
-    Eigen::VectorXf pose_offset = poseBlendShapes_ * pose_map;
-    v_posed += Eigen::Map<Eigen::MatrixXf>(pose_offset.data(), N, 3);
+    // 3. Identity rotations (no pose)
+    std::vector<Eigen::Matrix3f> rotations(numJoints, Eigen::Matrix3f::Identity());
 
     // 4. Forward kinematics
     auto G = computeGlobalTransforms(J, rotations);
 
     // 5. Linear Blend Skinning
     Eigen::MatrixXf v_final(N, 3);
-
     for (int i = 0; i < N; ++i) {
-        Eigen::Vector4f v_homo(v_posed(i,0), v_posed(i,1), v_posed(i,2), 1.0f);
+        Eigen::Vector4f v_homo(v_posed(i, 0), v_posed(i, 1), v_posed(i, 2), 1.0f);
         Eigen::Vector4f v_sum = Eigen::Vector4f::Zero();
 
         for (int j = 0; j < numJoints; ++j) {
-            float w = weights_(i, j);
+            float w = (i < weights_.rows() && j < weights_.cols())
+                          ? weights_(i, j)
+                          : 0.0f;
             v_sum += w * (G[j] * v_homo);
         }
 
         v_final.row(i) = v_sum.head<3>().transpose();
     }
 
-    // Output mesh
     mesh.vertices.reserve(N);
-    for (int i = 0; i < N; ++i) {
-        mesh.vertices.emplace_back(v_final(i,0), v_final(i,1), v_final(i,2));
-    }
+    for (int i = 0; i < N; ++i)
+        mesh.vertices.emplace_back(v_final(i, 0), v_final(i, 1), v_final(i, 2));
 
     mesh.faces.reserve(faces_.rows());
-    for (int i = 0; i < faces_.rows(); ++i) {
-        mesh.faces.emplace_back(faces_(i,0), faces_(i,1), faces_(i,2));
-    }
+    for (int i = 0; i < faces_.rows(); ++i)
+        mesh.faces.emplace_back(faces_(i, 0), faces_(i, 1), faces_(i, 2));
 
     return mesh;
 }
