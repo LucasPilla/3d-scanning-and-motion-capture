@@ -66,9 +66,16 @@ RUN make -j$(nproc) && make install
 # Add /usr/local/lib to PATH as some libraries are installed there.
 ENV LD_LIBRARY_PATH="/usr/local/lib"
 
+# Install python and dependencies for scripts
+RUN apt-get install -y \
+    python3 \
+    python3-pip 
+    
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
 # Initial directory
 WORKDIR /usr/src/project
 
 # Default command
 CMD ["bash"]
-
