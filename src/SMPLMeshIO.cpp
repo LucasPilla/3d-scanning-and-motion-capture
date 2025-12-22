@@ -6,19 +6,20 @@
 bool SMPLMeshIO::saveOBJ(const std::string& filename, const SMPLMesh& mesh) {
     std::ofstream file(filename);
     if (!file.is_open()) {
-        std::cerr << "Failed to open file for export: " << filename << std::endl;
+        std::cerr << "Error: Could not open file for mesh export: " << filename << std::endl;
         return false;
     }
 
-    // Set precision for floating point coordinates
+    // Set precision for high-quality vertex coordinates
     file << std::fixed << std::setprecision(6);
 
-    // Write Vertices
+    // Write Vertices (v x y z)
     for (const auto& v : mesh.vertices) {
         file << "v " << v.x() << " " << v.y() << " " << v.z() << "\n";
     }
 
-    // Write Faces (OBJ indices start at 1)
+    // Write Faces (f v1 v2 v3)
+    // Note: OBJ indices are 1-based, while Eigen/C++ are 0-based.
     for (const auto& f : mesh.faces) {
         file << "f " << f.x() + 1 << " " << f.y() + 1 << " " << f.z() + 1 << "\n";
     }
@@ -31,12 +32,12 @@ bool SMPLMeshIO::saveJointsOBJ(const std::string& filename, const std::vector<Ei
     std::ofstream file(filename);
     if (!file.is_open()) return false;
 
-    // Exporting joints as simple vertices (points)
-    // In MeshLab, you may need to enable "Point Size" to see them clearly
+    // Export joints as single vertices. 
+    // In MeshLab, these will appear as a point cloud.
     for (const auto& j : joints) {
         file << "v " << j.x() << " " << j.y() << " " << j.z() << "\n";
     }
-    
+
     file.close();
     return true;
 }

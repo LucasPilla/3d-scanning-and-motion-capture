@@ -29,6 +29,7 @@ add_executable(pipeline
     src/FittingOptimizer.cpp
     src/TemporalSmoother.cpp
     src/SMPLModel.cpp
+    src/SMPLMeshIO.cpp
 )
 
 target_include_directories(pipeline PRIVATE
@@ -55,4 +56,3 @@ target_link_libraries(extract_keypoints
 target_include_directories(extract_keypoints PRIVATE
     include
 )
-
