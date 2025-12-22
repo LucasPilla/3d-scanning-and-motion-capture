@@ -32,8 +32,14 @@
 //       convert these to OpenCV or other formats when needed.
 struct SMPLMesh
 {
-    std::vector<Eigen::Vector3f> vertices; // size: numVertices, positions in world or model space
-    std::vector<Eigen::Vector3i> faces;    // size: numFaces, triangle vertex indices
+    // size: numVertices, positions in world or model space
+    std::vector<Eigen::Vector3f> vertices;
+    
+    // size: numFaces, triangle vertex indices
+    std::vector<Eigen::Vector3i> faces;    
+
+    // Saves the mesh to OBJ format
+    bool save(const std::string& path) const;
 };
 
 class SMPLModel
@@ -51,7 +57,7 @@ public:
     //   - "joint_regressor"    : (24, 6890)
     //   - "weights"            : (6890, 24)          [may be used later]
     //   - "kinematic_tree"     : (2, 24)             [may be used later]
-    //
+    
     // Returns true on success, false on failure.
     bool loadFromJson(const std::string& jsonPath);
 
@@ -96,14 +102,16 @@ private:
     // Joint regressor: (numJoints, numVertices)
     MatrixXf jointRegressor_;
 
-    MatrixXf weights_;            // (N, 24)
-    MatrixXi kinematicTree_;      // (2, 24)
+    // Weights: (numVertices, numJoints)
+    MatrixXf weights_;
+
+    // Kinematic Tree: (2, numJoints)
+    MatrixXi kinematicTree_;      
+
     // --------- Current parameters ---------
 
-    // Current pose & shape parameters (stored only for now).
-    Eigen::VectorXf poseParams_;   // e.g. size 72
-    Eigen::VectorXf shapeParams_;  // e.g. size 10
-
+    Eigen::VectorXf poseParams_ = Eigen::VectorXf::Zero(72);  
+    Eigen::VectorXf shapeParams_ = Eigen::VectorXf::Zero(10);
     bool loaded_ = false;
 
     // --- SMPL internal helpers ---

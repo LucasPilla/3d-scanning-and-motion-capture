@@ -14,11 +14,40 @@
 
 #include <fstream>
 #include <iostream>
+#include <cmath>
 
 // Single-header JSON library (see note in SMPLModel.h).
 #include <nlohmann/json.hpp>
 
 using nlohmann::json;
+
+bool SMPLMesh::save(const std::string& path) const {
+    
+    std::ofstream outFile(path);
+    if (!outFile.is_open()) {
+        std::cerr << "Error: Could not open file for writing: " << path << std::endl;
+        return false;
+    }
+
+    // 1. Save vertices (v x y z)
+    for (const auto& vertex : vertices) {
+        if (vertex.allFinite()) {
+            outFile << "v " << vertex.x() << " " << vertex.y() << " " << vertex.z() << "\n";
+        } else {
+            outFile << "v 0.0 0.0 0.0\n";
+        }
+    }
+
+    // 2. Save faces (f v1 v2 v3) - OBJ is 1-indexed!
+    for (const auto& face : faces) {
+        outFile << "f " << face[0] + 1 << " " 
+                        << face[1] + 1 << " " 
+                        << face[2] + 1 << "\n";
+    }
+
+    outFile.close();
+    return true;
+}
 
 bool SMPLModel::loadFromJson(const std::string& jsonPath)
 {
@@ -80,8 +109,8 @@ bool SMPLModel::loadFromJson(const std::string& jsonPath)
         shapeBlendShapes_.resize(numVertices * 3, numShapeCoeffs);
         for (int v = 0; v < numVertices; ++v) {
             for (int c = 0; c < 3; ++c) {
+                int row = v * 3 + c; 
                 for (int k = 0; k < numShapeCoeffs; ++k) {
-                    int row = 3 * v + c;
                     shapeBlendShapes_(row, k) = static_cast<float>(shapeBs[v][c][k]);
                 }
             }
@@ -101,8 +130,8 @@ bool SMPLModel::loadFromJson(const std::string& jsonPath)
         poseBlendShapes_.resize(numVertices * 3, numPoseCoeffs);
         for (int v = 0; v < numVertices; ++v) {
             for (int c = 0; c < 3; ++c) {
+                int row = v * 3 + c;
                 for (int k = 0; k < numPoseCoeffs; ++k) {
-                    int row = 3 * v + c;
                     poseBlendShapes_(row, k) = static_cast<float>(poseBs[v][c][k]);
                 }
             }
@@ -120,6 +149,32 @@ bool SMPLModel::loadFromJson(const std::string& jsonPath)
         for (int jIdx = 0; jIdx < numJoints; ++jIdx) {
             for (int v = 0; v < numVertices; ++v) {
                 jointRegressor_(jIdx, v) = static_cast<float>(jr[jIdx][v]);
+            }
+        }
+
+        // -------- kinematic_tree (2, numJoints) --------
+        const auto& kt = j.at("kinematic_tree");
+        const int ktRows = static_cast<int>(kt.size());    // Expected: 2
+        const int ktCols = static_cast<int>(kt[0].size()); // Expected: numJoints (24)
+
+        kinematicTree_.resize(ktRows, ktCols);
+        for (int r = 0; r < ktRows; ++r) {
+            for (int c = 0; c < ktCols; ++c) {
+                kinematicTree_(r, c) = static_cast<int>(kt[r][c]);
+            }
+        }
+
+        // -------- weights (N, numJoints) --------
+        const auto& w = j.at("weights");
+        if (static_cast<int>(w.size()) != numVertices) {
+            std::cerr << "SMPLModel::loadFromJson - invalid weights shape\n";
+            return false;
+        }
+
+        weights_.resize(numVertices, numJoints);
+        for (int v = 0; v < numVertices; ++v) {
+            for (int jIdx = 0; jIdx < numJoints; ++jIdx) {
+                weights_(v, jIdx) = static_cast<float>(w[v][jIdx]);
             }
         }
 
@@ -217,14 +272,8 @@ SMPLMesh SMPLModel::getMesh() const
 {
     SMPLMesh mesh;
 
-    if (!loaded_) {
-        // Return empty mesh if the model has not been loaded yet.
-        return mesh;
-    }
-
     const int N = templateVertices_.rows();
     const int numJoints = jointRegressor_.rows();
-
 
     // 1. Shape blend shapes
     Eigen::VectorXf beta = shapeParams_;
@@ -232,12 +281,11 @@ SMPLMesh SMPLModel::getMesh() const
 
     if (beta.size() > 0) {
         Eigen::VectorXf shape_offset = shapeBlendShapes_ * beta;
-        v_shaped += Eigen::Map<Eigen::MatrixXf>(shape_offset.data(), N, 3);
+        v_shaped += Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, 3, Eigen::RowMajor>>(shape_offset.data(), N, 3);
     }
 
     // 2. Joint regression
     Eigen::MatrixXf J = computeJoints(v_shaped);
-
 
     // 3. Pose blend shapes
     std::vector<Eigen::Matrix3f> rotations(numJoints);
@@ -249,13 +297,16 @@ SMPLMesh SMPLModel::getMesh() const
     Eigen::VectorXf pose_map((numJoints - 1) * 9);
     for (int i = 1; i < numJoints; ++i) {
         Eigen::Matrix3f diff = rotations[i] - Eigen::Matrix3f::Identity();
+
+        Eigen::Matrix<float, 3, 3, Eigen::RowMajor> rowMajorDiff = diff;
+
         Eigen::Map<Eigen::VectorXf>(pose_map.data() + (i - 1) * 9, 9) =
-            Eigen::Map<Eigen::VectorXf>(diff.data(), 9);
+            Eigen::Map<Eigen::VectorXf>(rowMajorDiff.data(), 9);
     }
 
     Eigen::MatrixXf v_posed = v_shaped;
     Eigen::VectorXf pose_offset = poseBlendShapes_ * pose_map;
-    v_posed += Eigen::Map<Eigen::MatrixXf>(pose_offset.data(), N, 3);
+    v_posed += Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, 3, Eigen::RowMajor>>(pose_offset.data(), N, 3);
 
     // 4. Forward kinematics
     auto G = computeGlobalTransforms(J, rotations);
