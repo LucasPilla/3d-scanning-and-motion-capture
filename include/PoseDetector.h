@@ -15,6 +15,7 @@
 #include <memory>
 #include <unordered_map>
 #include <string>
+#include <optional>
 
  // Represents a 2D keypoint with position and confidence score
 struct Point2D
@@ -42,12 +43,11 @@ struct Pose2D
 
 // Wraps the OpenPose API
 // Input: OpenCV frame
-// Output: 2D pose for a single person (highest-confidence). 
-//         Joints with very low confidence are zeroed out.
+// Output: 2D detected joints for a single person.
 class PoseDetector {
 public:
-    // Constructor selects mode
-    explicit PoseDetector(PoseSource source);
+    // Constructor with optional path for precomputed keypoints
+    explicit PoseDetector(std::optional<std::string> precomputedKeypointsPath);
 
     // Load keypoints for Precomputed mode
     bool loadKeypoints(const std::string& jsonPath);

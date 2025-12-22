@@ -2,9 +2,9 @@
 // Implementation of the PoseDetector class (OpenPose wrapper).
 // 
 // Contains the code for:
-//   - initializing the OpenPose wrapper
-//   - running pose estimation on each frame
-//   - converting OpenPose output to our internal keypoint format
+//   - Initializing the OpenPose wrapper
+//   - Precomputed or live joint detection
+//   - Converting OpenPose output to our internal keypoint format
 //
 // TODOs:
 //   - Set OpenPose configs (done)
@@ -19,12 +19,18 @@
 
 using json = nlohmann::json;
 
-PoseDetector::PoseDetector(PoseSource source)
-    : source_(source)
+PoseDetector::PoseDetector(std::optional<std::string> precomputedKeypointsPath)
 {
-    // Only initialize OpenPose if needed
-    if (source_ == PoseSource::OpenPoseLive) {
-
+    // Only initialize OpenPose if not using precomputed keypoints
+    if (precomputedKeypointsPath.has_value()) 
+    {
+        std::string path = *precomputedKeypointsPath; 
+        std::cout << "Using pre-computed keypoints from: " << path << std::endl;
+        source_ = PoseSource::Precomputed;
+        loadKeypoints(path);
+    } 
+    else 
+    {
         // Configure OpenPose model parameters
         op::WrapperStructPose poseConfig;
         poseConfig.modelFolder = "/opt/openpose/models/";
@@ -48,11 +54,6 @@ PoseDetector::PoseDetector(PoseSource source)
 
 bool PoseDetector::loadKeypoints(const std::string& jsonPath)
 {
-    if (source_ != PoseSource::Precomputed) {
-        std::cerr << "loadKeypoints called in non-precomputed mode\n";
-        return false;
-    }
-
     std::ifstream in(jsonPath);
     if (!in.is_open()) {
         std::cerr << "Failed to open keypoints file: " << jsonPath << "\n";
@@ -91,8 +92,12 @@ Pose2D PoseDetector::detect(const cv::Mat& frame, int frameIdx)
 
     // OpenPose live mode
     Pose2D pose2D;
-    auto input = OP_CV2OPCONSTMAT(frame); // Convert OpenCV image into OpenPose input format
-    auto result = openpose_->emplaceAndPop(input); // Send frame to OpenPose and retrieve output 
+
+    // Convert OpenCV image into OpenPose input format
+    auto input = OP_CV2OPCONSTMAT(frame); 
+
+    // Send frame to OpenPose and retrieve output 
+    auto result = openpose_->emplaceAndPop(input);
 
     if (!result || result->empty()) // No detections
         return pose2D;

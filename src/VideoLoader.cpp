@@ -20,6 +20,7 @@ VideoLoader::VideoLoader(const std::string& path)
     cap.open(path);
     if (!cap.isOpened()) {
         std::cerr << "Error opening video: " << path << "\n";
+        exit(0);
     }
 }
 
