@@ -14,9 +14,12 @@
 #include "FittingOptimizer.h"
 #include "TemporalSmoother.h"
 #include "SMPLModel.h" 
+#include "CameraModel.h"
+
 #include <argparse/argparse.hpp>
 #include <iostream>
 #include <filesystem>
+#include <Eigen/Dense>
 
 int main(int argc, char* argv[])
 {
@@ -78,6 +81,13 @@ int main(int argc, char* argv[])
     // Initialize output video writer
     Visualization visualizer(loader.width(), loader.height(), loader.fps());
 
+    // Initialize simple pinhole camera intrinsics (approximate)
+    float fx = static_cast<float>(loader.width());
+    float fy = static_cast<float>(loader.width()); // assume square pixels, fx ~ fy
+    float cx = fx / 2.0f;
+    float cy = static_cast<float>(loader.height()) / 2.0f;
+    CameraModel camera(fx, fy, cx, cy);
+
     // Load SMPL model (preprocessed JSON).
     SMPLModel smplModel;
     if (!smplModel.loadFromJson(smplPath)) {
@@ -117,6 +127,68 @@ int main(int argc, char* argv[])
 
         // Trigger SMPL forward pass once per frame with the current params
         SMPLMesh mesh = smplModel.getMesh();
+
+        // Project SMPL joints to image using the camera model (debug visualization)
+        Eigen::MatrixXf joints3D = smplModel.getJointPositions();
+
+        // BODY_25 index for MidHip in OpenPose
+        const int MID_HIP_2D = 8;
+        const int ROOT_3D = 0; // SMPL root joint index
+
+        bool canAlignRoot =
+            joints3D.rows() > ROOT_3D &&
+            pose2D.keypoints.size() > MID_HIP_2D &&
+            pose2D.keypoints[MID_HIP_2D].score > 0.1f;
+
+        Eigen::Vector3f offset = Eigen::Vector3f::Zero();
+
+        if (canAlignRoot) {
+            // 2D pelvis from OpenPose
+            Point2D root2D = pose2D.keypoints[MID_HIP_2D];
+
+            // Choose a nominal depth (meters) for the person
+            float z0 = 3.0f;
+
+            // Desired camera-space position of pelvis
+            Eigen::Vector3f rootCam(
+                (root2D.x - cx) / fx * z0,
+                (root2D.y - cy) / fy * z0,
+                z0
+            );
+
+            // Current SMPL root in model space
+            Eigen::Vector3f smplRoot(
+                joints3D(ROOT_3D, 0),
+                joints3D(ROOT_3D, 1),
+                joints3D(ROOT_3D, 2)
+            );
+
+            // Translation that maps SMPL root to desired camera position
+            offset = rootCam - smplRoot;
+        }
+
+        for (int i = 0; i < joints3D.rows(); ++i) {
+            Eigen::Vector3f pWorld(
+                joints3D(i, 0),
+                joints3D(i, 1),
+                joints3D(i, 2)
+            );
+
+            // Apply global translation so root matches OpenPose pelvis
+            Eigen::Vector3f pCam = pWorld + offset;
+
+            if (pCam.z() <= 0.0f) {
+                continue;
+            }
+
+            Eigen::Vector2f p2D = camera.project(pCam);
+            cv::Point pt2D(
+                static_cast<int>(p2D.x()),
+                static_cast<int>(p2D.y())
+            );
+
+            cv::circle(frame, pt2D, 3, cv::Scalar(255, 0, 0), -1);
+        }
 
         // // Save mesh
         // std::ostringstream meshFilename;
