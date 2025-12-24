@@ -78,6 +78,9 @@ public:
     //   - Later, it will apply shape & pose blendshapes and skinning.
     SMPLMesh getMesh() const;
 
+    // Get posed 3D joint positions (one row per joint, columns = x,y,z).
+    Eigen::MatrixXf getJointPositions() const;
+
     // Simple status helper.
     bool isLoaded() const { return loaded_; }
 

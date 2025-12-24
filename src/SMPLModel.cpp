@@ -116,6 +116,9 @@ bool SMPLModel::loadFromJson(const std::string& jsonPath)
             }
         }
 
+        // NOTE: In SMPL, posedirs/pose_blend_shapes is stored as a 3D tensor
+        // (numVertices, 3, numPoseCoeffs). We flatten it row-wise to a
+        // (numVertices * 3, numPoseCoeffs) matrix here.
         // -------- pose_blend_shapes (N, 3, numPoseCoeffs) --------
         const auto& poseBs = j.at("pose_blend_shapes");
         const int numPoseVerts = static_cast<int>(poseBs.size());
@@ -280,8 +283,16 @@ SMPLMesh SMPLModel::getMesh() const
     Eigen::MatrixXf v_shaped = templateVertices_;
 
     if (beta.size() > 0) {
-        Eigen::VectorXf shape_offset = shapeBlendShapes_ * beta;
-        v_shaped += Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, 3, Eigen::RowMajor>>(shape_offset.data(), N, 3);
+        if (shapeBlendShapes_.cols() == beta.size()) {
+            Eigen::VectorXf shape_offset = shapeBlendShapes_ * beta;
+            v_shaped += Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, 3, Eigen::RowMajor>>(
+                shape_offset.data(), N, 3
+            );
+        } else {
+            std::cerr << "SMPLModel::getMesh - shape_blend_shapes dimension mismatch: "
+                      << shapeBlendShapes_.rows() << "x" << shapeBlendShapes_.cols()
+                      << " vs beta size " << beta.size() << std::endl;
+        }
     }
 
     // 2. Joint regression
@@ -305,8 +316,16 @@ SMPLMesh SMPLModel::getMesh() const
     }
 
     Eigen::MatrixXf v_posed = v_shaped;
-    Eigen::VectorXf pose_offset = poseBlendShapes_ * pose_map;
-    v_posed += Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, 3, Eigen::RowMajor>>(pose_offset.data(), N, 3);
+    if (poseBlendShapes_.cols() == pose_map.size()) {
+        Eigen::VectorXf pose_offset = poseBlendShapes_ * pose_map;
+        v_posed += Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, 3, Eigen::RowMajor>>(
+            pose_offset.data(), N, 3
+        );
+    } else {
+        std::cerr << "SMPLModel::getMesh - pose_blend_shapes dimension mismatch: "
+                  << poseBlendShapes_.rows() << "x" << poseBlendShapes_.cols()
+                  << " vs pose_map size " << pose_map.size() << std::endl;
+    }
 
     // 4. Forward kinematics
     auto G = computeGlobalTransforms(J, rotations);
@@ -338,4 +357,39 @@ SMPLMesh SMPLModel::getMesh() const
     }
 
     return mesh;
+}
+
+Eigen::MatrixXf SMPLModel::getJointPositions() const
+{
+    Eigen::MatrixXf joints;
+
+    if (!loaded_) {
+        // Return empty matrix if the model has not been loaded yet.
+        return joints;
+    }
+
+    const int N = templateVertices_.rows();
+
+    // 1. Shape blend shapes: v_shaped
+    Eigen::VectorXf beta = shapeParams_;
+    Eigen::MatrixXf v_shaped = templateVertices_;
+
+    if (beta.size() > 0) {
+        if (shapeBlendShapes_.cols() == beta.size()) {
+            Eigen::VectorXf shape_offset = shapeBlendShapes_ * beta;
+            v_shaped += Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, 3, Eigen::RowMajor>>(
+                shape_offset.data(), N, 3
+            );
+        } else {
+            std::cerr << "SMPLModel::getJointPositions - shape_blend_shapes dimension mismatch: "
+                      << shapeBlendShapes_.rows() << "x" << shapeBlendShapes_.cols()
+                      << " vs beta size " << beta.size() << std::endl;
+        }
+    }
+
+    // 2. Regress joints directly from (shape-deformed) vertices
+    //    This gives 3D joint positions in model/world space.
+    joints = computeJoints(v_shaped); // (numJoints, 3)
+
+    return joints;
 }
