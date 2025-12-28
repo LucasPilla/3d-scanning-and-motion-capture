@@ -16,6 +16,30 @@
 
 #include "FittingOptimizer.h"
 #include "SMPLModel.h"  // Declared in the header, the implementation will come later
+#include "CameraModel.h"
+#include <unordered_map>
+#include <limits>
+#include <cmath>
+
+// SMPL (24) → OpenPose BODY_25 mapping
+static const std::unordered_map<int, int> SMPL_TO_OPENPOSE = {
+    {0,  8},   // Pelvis -> MidHip
+    {1,  9},   // L Hip
+    {2, 12},   // R Hip
+    {3, 10},   // L Knee
+    {4, 13},   // R Knee
+    {5, 11},   // L Ankle
+    {6, 14},   // R Ankle
+    {7,  1},   // Spine -> Neck
+    {8,  2},   // L Shoulder
+    {9,  5},   // R Shoulder
+    {10, 3},   // L Elbow
+    {11, 6},   // R Elbow
+    {12, 4},   // L Wrist
+    {13, 7},   // R Wrist
+    {14, 0},   // Head -> Nose
+};
+
 
 FittingOptimizer::FittingOptimizer(SMPLModel* smplModel_,
                                     const Options& options_)
@@ -71,6 +95,67 @@ void FittingOptimizer::addReprojectionTerms()
     //      * Project the corresponding 3D SMPL joint
     //      * Add a reprojection error residual block
     //  - Define a cost functor that compares projected vs. observed 2D joint
+
+    if (!smplModel || !smplModel->isLoaded()) {
+        std::cout << "[Reprojection] SMPL model not loaded\n";
+        return;
+    }
+
+    // Get 3D SMPL joints (Nx3)
+    Eigen::MatrixXf smplJoints = smplModel->getJointPositions();
+
+    // Simple pinhole camera (temporary values)
+    CameraModel camera(
+        1000.0f, 1000.0f,   // fx, fy
+        640.0f / 2.0f,      // cx
+        480.0f / 2.0f       // cy
+    );
+
+    double totalError = 0.0;
+    int validJoints = 0;
+
+    for (const auto& [smplIdx, opIdx] : SMPL_TO_OPENPOSE) {
+
+        if (smplIdx >= smplJoints.rows())
+            continue;
+
+        if (opIdx >= static_cast<int>(current2DJoints.keypoints.size()))
+            continue;
+
+        const Point2D& kp = current2DJoints.keypoints[opIdx];
+
+        // Skip low-confidence OpenPose joints
+        if (kp.score < 0.2f)
+            continue;
+
+        Eigen::Vector3f joint3D = smplJoints.row(smplIdx);
+
+        // Skip points behind the camera
+        if (joint3D.z() <= 0)
+            continue;
+
+        Eigen::Vector2f projected = camera.project(joint3D);
+
+        double dx = projected.x() - kp.x;
+        double dy = projected.y() - kp.y;
+
+        double error = std::sqrt(dx * dx + dy * dy);
+
+        // Weight by confidence
+        totalError += error * kp.score;
+        validJoints++;
+    }
+
+    if (validJoints > 0) {
+        double avgError = totalError / validJoints;
+        std::cout << "[Reprojection] Avg error: "
+                  << avgError << " px ("
+                  << validJoints << " joints)"
+                  << std::endl;
+    } else {
+        std::cout << "[Reprojection] No valid joints\n";
+    }
+
 }
 
 void FittingOptimizer::addPriorTerms()
