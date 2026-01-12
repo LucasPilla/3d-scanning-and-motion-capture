@@ -51,8 +51,19 @@ FittingOptimizer::FittingOptimizer(SMPLModel* smplModel_,
     //   - 10 shape parameters (betas)
     //
     // For now, initialize with reasonable defaults (all zeros)
-    poseParams.assign(72, 0.0);
-    shapeParams.assign(10, 0.0);
+    int numPose  = 72;
+    int numShape = 10;
+
+    if (smplModel && smplModel->isLoaded()) {
+        numPose  = smplModel->numPoseCoeffs();
+        numShape = smplModel->numShapeCoeffs();
+    }
+
+    poseParams.assign(numPose,  0.0);
+    shapeParams.assign(numShape, 0.0);
+
+    poseHistory.clear();
+    shapeHistory.clear();
 }
 
 void FittingOptimizer::fitFrame(const Pose2D& observation)
@@ -73,11 +84,24 @@ void FittingOptimizer::fitFrame(const Pose2D& observation)
     addReprojectionTerms();
     addPriorTerms();
 
+    // Store *raw* parameters for this frame into the history buffer
+    poseHistory.push_back(poseParams);
+    shapeHistory.push_back(shapeParams);
+
+    // Apply temporal regularization (currently implemented as explicit smoothing)
     if (options.temporalRegularization) {
         addTemporalRegularizationTerms();
     }
 
-    // NOTE: Do not call any Ceres APIs yet (will be implemented later)
+    // Make sure downstream code (e.g., main.cpp) sees the
+    // possibly-smoothed parameters when calling SMPLModel
+    if (smplModel) {
+        smplModel->setPose(poseParams);
+        smplModel->setShape(shapeParams);
+    }
+
+    // NOTE: Ceres solve will be added later; temporal smoothing here
+    //       conceptually implements a penalty on frame-to-frame changes
 }
 
 void FittingOptimizer::buildProblemForCurrentFrame()
@@ -167,10 +191,23 @@ void FittingOptimizer::addPriorTerms()
 
 void FittingOptimizer::addTemporalRegularizationTerms()
 {
-    // TODO:
-    //  - Add temporal smoothness terms that couple consecutive frames
-    //    (e.g., penalties on pose differences over time).
-    //  - These terms implement "temporal smoothing during optimization"
-    //    as described in the proposal, potentially using TemporalSmoother
-    //    to construct regularization weights/kernels.
+    // With a single frame there is nothing to regularize against
+    if (poseHistory.size() < 2) {
+        return;
+    }
+
+    // Smooth pose and shape sequences over time using TemporalSmoother.
+    // This is equivalent to adding a temporal smoothness residual that
+    // penalizes large frame-to-frame changes
+    const auto smoothedPose  = smoother.smoothPoseSequence(poseHistory);
+    const auto smoothedShape = smoother.smoothShapeSequence(shapeHistory);
+
+    if (!smoothedPose.empty()) {
+        // Use smoothed parameters for the current (latest) frame
+        poseParams = smoothedPose.back();
+    }
+
+    if (!smoothedShape.empty()) {
+        shapeParams = smoothedShape.back();
+    }
 }

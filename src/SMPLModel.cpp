@@ -186,6 +186,10 @@ bool SMPLModel::loadFromJson(const std::string& jsonPath)
         return false;
     }
 
+    // Initialize parameter vectors to match the loaded model
+    poseParams_  = Eigen::VectorXf::Zero(3 * jointRegressor_.rows());   // e.g. 24*3 = 72
+    shapeParams_ = Eigen::VectorXf::Zero(shapeBlendShapes_.cols());
+
     loaded_ = true;
     std::cout << "SMPLModel::loadFromJson - loaded model from " << jsonPath << "\n";
     return true;

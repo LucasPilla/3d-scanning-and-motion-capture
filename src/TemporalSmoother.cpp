@@ -15,43 +15,69 @@
 TemporalSmoother::ParamSequence
 TemporalSmoother::smoothPoseSequence(const ParamSequence& rawPoseSequence)
 {
-    // TODO:
-    //  - Choose smoothing method (moving average / Gaussian / Savitzky–Golay) based on configuration or experimentation
-    //  - For now this is a simple passthrough
-    return rawPoseSequence;
+    if (rawPoseSequence.empty()) {
+        return rawPoseSequence;
+    }
+
+    // A small centered window (e.g. 5 frames) works well for pose
+    constexpr int kWindowSize = 5;
+    return applyMovingAverage(rawPoseSequence, kWindowSize);
 }
 
 TemporalSmoother::ParamSequence
 TemporalSmoother::smoothShapeSequence(const ParamSequence& rawShapeSequence)
 {
-    // TODO:
-    //  - Shape changes slowly, so consider:
-    //      * very light smoothing, or
-    //      * enforcing piecewise-constant shape
-    //  - For now this is a simple passthrough
-    return rawShapeSequence;
+    if (rawShapeSequence.empty()) {
+        return rawShapeSequence;
+    }
+
+    // Shape varies more slowly, slightly larger window can be used if desired
+    constexpr int kWindowSize = 7;
+    return applyMovingAverage(rawShapeSequence, kWindowSize);
 }
 
 TemporalSmoother::ParamSequence
 TemporalSmoother::applyMovingAverage(const ParamSequence& sequence,
-                                     int /*windowSize*/)
+                                     int windowSize)
 {
-    // TODO:
-    //  - Implement moving average over time for each parameter
-    //  - Carefully handle boundaries (start/end of the sequence)
-    // For now return the input sequence unchanged
-    return sequence;
+    if (sequence.empty() || windowSize <= 1) {
+        return sequence;
+    }
+
+    const int T = static_cast<int>(sequence.size());
+    const int D = static_cast<int>(sequence.front().size());
+    TemporalSmoother::ParamSequence smoothed(
+        T, std::vector<double>(D, 0.0)
+    );
+
+    const int half = windowSize / 2;
+
+    for (int t = 0; t < T; ++t) {
+        const int start = std::max(0, t - half);
+        const int end   = std::min(T - 1, t + half);
+        const int count = end - start + 1;
+
+        for (int d = 0; d < D; ++d) {
+            double sum = 0.0;
+            for (int k = start; k <= end; ++k) {
+                // For inconsistent dimensions
+                if (d < static_cast<int>(sequence[k].size())) {
+                    sum += sequence[k][d];
+                }
+            }
+            smoothed[t][d] = sum / static_cast<double>(count);
+        }
+    }
+
+    return smoothed;
 }
 
+// Keep Gaussian / Savitzky–Golay as TODO stubs for now
 TemporalSmoother::ParamSequence
 TemporalSmoother::applyGaussianFilter(const ParamSequence& sequence,
                                       double /*sigma*/,
                                       int /*kernelRadius*/)
 {
-    // TODO:
-    //  - Build a normalized 1D Gaussian kernel
-    //  - Convolve over the time dimension for each parameter independently
-    // For now return the input sequence unchanged
     return sequence;
 }
 
@@ -60,9 +86,5 @@ TemporalSmoother::applySavitzkyGolay(const ParamSequence& sequence,
                                      int /*windowSize*/,
                                      int /*polyOrder*/)
 {
-    // TODO:
-    //  - Implement Savitzky–Golay polynomial fitting within a sliding window
-    //  - Use the fitted polynomial to estimate the smoothed value at the center
-    // For now return the input sequence unchanged
     return sequence;
 }
