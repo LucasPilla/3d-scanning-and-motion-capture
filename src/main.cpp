@@ -96,7 +96,7 @@ int main(int argc, char* argv[])
 
     // Configure optimizer fitting options (flags).
     FittingOptimizer::Options fitOpts;
-    fitOpts.temporalRegularization = false;
+    fitOpts.temporalRegularization = true;
     fitOpts.warmStarting           = false;
     fitOpts.freezeShapeParameters  = false;
 

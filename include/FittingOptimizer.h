@@ -15,6 +15,7 @@
 
 #include <vector>
 #include "PoseDetector.h"
+#include "TemporalSmoother.h"
 
 // TODO: Implement SMPLModel in SMPLModel.h / SMPLModel.cpp
 class SMPLModel;
@@ -67,6 +68,11 @@ private:
 
     // Pointer to SMPL model used for projecting 3D joints
     SMPLModel* smplModel = nullptr;
+
+    // History of parameters for temporal smoothing / regularization
+    TemporalSmoother smoother;
+    TemporalSmoother::ParamSequence poseHistory;
+    TemporalSmoother::ParamSequence shapeHistory;
 
     // ---------- Ceres preparation hooks (no implementation yet) ----------
 
