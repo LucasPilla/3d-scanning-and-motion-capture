@@ -20,6 +20,108 @@
 #include <unordered_map>
 #include <limits>
 #include <cmath>
+#include <ceres/ceres.h>
+
+struct TranslationResidual
+{
+    TranslationResidual(float x_smpl,
+                        float y_smpl,
+                        float x_obs,
+                        float y_obs,
+                        float weight)
+        : x_smpl_(x_smpl),
+          y_smpl_(y_smpl),
+          x_obs_(x_obs),
+          y_obs_(y_obs),
+          w_(weight)
+    {}
+
+    template <typename T>
+    bool operator()(const T* const t, T* residuals) const
+    {
+        // t[0] = dx, t[1] = dy
+        T u = T(x_smpl_) + t[0];
+        T v = T(y_smpl_) + t[1];
+
+        residuals[0] = T(w_) * (u - T(x_obs_));
+        residuals[1] = T(w_) * (v - T(y_obs_));
+        return true;
+    }
+
+    float x_smpl_, y_smpl_;
+    float x_obs_, y_obs_;
+    float w_;
+};
+
+struct RigidReprojectionResidual
+{
+    RigidReprojectionResidual(float X, float Y, float Z,
+                              float x_obs, float y_obs,
+                              float fx, float fy, float cx, float cy,
+                              float weight)
+        : X_(X), Y_(Y), Z_(Z),
+          x_obs_(x_obs), y_obs_(y_obs),
+          fx_(fx), fy_(fy), cx_(cx), cy_(cy),
+          w_(weight)
+    {}
+
+    template <typename T>
+    bool operator()(const T* const pose, T* residuals) const
+    {
+        // pose = [rx, ry, rz, tx, ty, tz] (Euler angles + translation)
+        const T rx = pose[0];
+        const T ry = pose[1];
+        const T rz = pose[2];
+        const T tx = pose[3];
+        const T ty = pose[4];
+        const T tz = pose[5];
+
+        const T cxr = ceres::cos(rx);
+        const T sxr = ceres::sin(rx);
+        const T cyr = ceres::cos(ry);
+        const T syr = ceres::sin(ry);
+        const T czr = ceres::cos(rz);
+        const T szr = ceres::sin(rz);
+
+        // R = Rz * Ry * Rx
+        const T R00 = czr * cyr;
+        const T R01 = czr * syr * sxr - szr * cxr;
+        const T R02 = czr * syr * cxr + szr * sxr;
+        const T R10 = szr * cyr;
+        const T R11 = szr * syr * sxr + czr * cxr;
+        const T R12 = szr * syr * cxr - czr * sxr;
+        const T R20 = -syr;
+        const T R21 = cyr * sxr;
+        const T R22 = cyr * cxr;
+
+        const T X = T(X_);
+        const T Y = T(Y_);
+        const T Z = T(Z_);
+
+        const T Xr = R00 * X + R01 * Y + R02 * Z;
+        const T Yr = R10 * X + R11 * Y + R12 * Z;
+        const T Zr = R20 * X + R21 * Y + R22 * Z;
+
+        const T Xc = Xr + tx;
+        const T Yc = Yr + ty;
+        const T Zc = Zr + tz;
+
+        const T Zsafe = Zc + T(1e-6); // avoid divide-by-zero
+
+        const T u = T(fx_) * (Xc / Zsafe) + T(cx_);
+        const T v = T(fy_) * (Yc / Zsafe) + T(cy_);
+
+        const T w = T(w_);
+        residuals[0] = w * (u - T(x_obs_));
+        residuals[1] = w * (v - T(y_obs_));
+        return true;
+    }
+
+    float X_, Y_, Z_;
+    float x_obs_, y_obs_;
+    float fx_, fy_, cx_, cy_;
+    float w_;
+};
 
 // SMPL (24) → OpenPose BODY_25 mapping
 static const std::unordered_map<int, int> SMPL_TO_OPENPOSE = {
@@ -209,5 +311,170 @@ void FittingOptimizer::addTemporalRegularizationTerms()
 
     if (!smoothedShape.empty()) {
         shapeParams = smoothedShape.back();
+    }
+}
+
+void FittingOptimizer::fit2DTranslation(const std::vector<Point2D>& smpl2D,
+                                        double& outDx,
+                                        double& outDy)
+{
+    outDx = 0.0;
+    outDy = 0.0;
+
+    if (current2DJoints.keypoints.empty()) {
+        std::cout << "[TranslationFit] No OpenPose joints for this frame.\n";
+        return;
+    }
+
+    ceres::Problem problem;
+
+    double t[2] = {0.0, 0.0}; // dx, dy
+
+    for (const auto& [smplIdx, opIdx] : SMPL_TO_OPENPOSE) {
+        if (smplIdx < 0 || smplIdx >= static_cast<int>(smpl2D.size())) {
+            continue;
+        }
+        if (opIdx < 0 || opIdx >= static_cast<int>(current2DJoints.keypoints.size())) {
+            continue;
+        }
+
+        const Point2D& smplPt = smpl2D[smplIdx];
+        const Point2D& obsPt  = current2DJoints.keypoints[opIdx];
+
+        // Skip if either side is invalid or low confidence
+        if (smplPt.x <= 0.0f || smplPt.y <= 0.0f) {
+            continue;
+        }
+        if (obsPt.score < 0.2f || obsPt.x <= 0.0f || obsPt.y <= 0.0f) {
+            continue;
+        }
+
+        double weight = static_cast<double>(std::sqrt(obsPt.score));
+
+        ceres::CostFunction* cost =
+            new ceres::AutoDiffCostFunction<TranslationResidual, 2, 2>(
+                new TranslationResidual(
+                    smplPt.x, smplPt.y,
+                    obsPt.x,  obsPt.y,
+                    static_cast<float>(weight))
+            );
+
+        problem.AddResidualBlock(cost, nullptr, t);
+    }
+
+    ceres::Solver::Options options;
+    options.max_num_iterations = 50;
+    options.minimizer_progress_to_stdout = true; // see loss per iteration
+
+    ceres::Solver::Summary summary;
+    ceres::Solve(options, &problem, &summary);
+
+    std::cout << summary.BriefReport() << std::endl;
+
+    outDx = t[0];
+    outDy = t[1];
+}
+
+void FittingOptimizer::fitRigid3D(const Eigen::MatrixXf& smplJointsCam,
+                                  float fx, float fy, float cx, float cy,
+                                  std::vector<Point2D>& smpl2DOut)
+{
+    smpl2DOut.assign(smplJointsCam.rows(), Point2D{});
+
+    if (current2DJoints.keypoints.empty()) {
+        std::cout << "[RigidFit] No OpenPose joints for this frame.\n";
+        return;
+    }
+
+    ceres::Problem problem;
+
+    // pose = [rx, ry, rz, tx, ty, tz]
+    double pose[6] = {0.0, 0.0, 0.0,
+                      0.0, 0.0, 0.0};
+
+    for (const auto& [smplIdx, opIdx] : SMPL_TO_OPENPOSE) {
+        if (smplIdx < 0 || smplIdx >= smplJointsCam.rows()) {
+            continue;
+        }
+        if (opIdx < 0 || opIdx >= static_cast<int>(current2DJoints.keypoints.size())) {
+            continue;
+        }
+
+        const Point2D& kp = current2DJoints.keypoints[opIdx];
+        if (kp.score < 0.2f) {
+            continue;
+        }
+
+        const float X = smplJointsCam(smplIdx, 0);
+        const float Y = smplJointsCam(smplIdx, 1);
+        const float Z = smplJointsCam(smplIdx, 2);
+
+        const double weight = std::sqrt(static_cast<double>(kp.score));
+
+        ceres::CostFunction* cost =
+            new ceres::AutoDiffCostFunction<RigidReprojectionResidual, 2, 6>(
+                new RigidReprojectionResidual(
+                    X, Y, Z,
+                    kp.x, kp.y,
+                    fx, fy, cx, cy,
+                    static_cast<float>(weight))
+            );
+
+        problem.AddResidualBlock(cost, nullptr, pose);
+    }
+
+    ceres::Solver::Options options;
+    options.max_num_iterations = 50;
+    options.minimizer_progress_to_stdout = true;
+
+    ceres::Solver::Summary summary;
+    ceres::Solve(options, &problem, &summary);
+
+    std::cout << summary.BriefReport() << std::endl;
+
+    // Reproject all SMPL joints with the optimized pose
+    const double rx = pose[0], ry = pose[1], rz = pose[2];
+    const double tx = pose[3], ty = pose[4], tz = pose[5];
+
+    const double cxr = std::cos(rx);
+    const double sxr = std::sin(rx);
+    const double cyr = std::cos(ry);
+    const double syr = std::sin(ry);
+    const double czr = std::cos(rz);
+    const double szr = std::sin(rz);
+
+    const double R00 = czr * cyr;
+    const double R01 = czr * syr * sxr - szr * cxr;
+    const double R02 = czr * syr * cxr + szr * sxr;
+    const double R10 = szr * cyr;
+    const double R11 = szr * syr * sxr + czr * cxr;
+    const double R12 = szr * syr * cxr - czr * sxr;
+    const double R20 = -syr;
+    const double R21 = cyr * sxr;
+    const double R22 = cyr * cxr;
+
+    for (int i = 0; i < smplJointsCam.rows(); ++i) {
+        const double X = smplJointsCam(i, 0);
+        const double Y = smplJointsCam(i, 1);
+        const double Z = smplJointsCam(i, 2);
+
+        const double Xr = R00 * X + R01 * Y + R02 * Z;
+        const double Yr = R10 * X + R11 * Y + R12 * Z;
+        const double Zr = R20 * X + R21 * Y + R22 * Z;
+
+        const double Xc = Xr + tx;
+        const double Yc = Yr + ty;
+        const double Zc = Zr + tz;
+
+        const double Zsafe = Zc + 1e-6;
+
+        const double u = fx * (Xc / Zsafe) + cx;
+        const double v = fy * (Yc / Zsafe) + cy;
+
+        Point2D pt;
+        pt.x = static_cast<float>(u);
+        pt.y = static_cast<float>(v);
+        pt.score = 1.0f;
+        smpl2DOut[i] = pt;
     }
 }
