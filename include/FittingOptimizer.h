@@ -14,7 +14,9 @@
 #pragma once
 
 #include <vector>
+#include <Eigen/Dense>
 #include "PoseDetector.h"
+#include "TemporalSmoother.h"
 
 // TODO: Implement SMPLModel in SMPLModel.h / SMPLModel.cpp
 class SMPLModel;
@@ -50,6 +52,18 @@ public:
     //   const std::vector<double>& getPoseParams() const;
     //   const std::vector<double>& getShapeParams() const;
 
+    // debug: fit a global 2D translation (dx, dy) so that projected SMPL 2D joints
+    // align better with the current OpenPose detections for this frame
+    void fit2DTranslation(const std::vector<Point2D>& smpl2D,
+        double& outDx,
+        double& outDy);
+
+    // debug: fit a global 3D rigid transform (R, t) in camera space so that
+    // SMPL 3D joints align better with OpenPose 2D detections
+    void fitRigid3D(const Eigen::MatrixXf& smplJointsCam,
+                    float fx, float fy, float cx, float cy,
+                    std::vector<Point2D>& smpl2DOut);
+
 private:
     // Configuration flags (see Options above).
     Options options;
@@ -67,6 +81,11 @@ private:
 
     // Pointer to SMPL model used for projecting 3D joints
     SMPLModel* smplModel = nullptr;
+
+    // History of parameters for temporal smoothing / regularization
+    TemporalSmoother smoother;
+    TemporalSmoother::ParamSequence poseHistory;
+    TemporalSmoother::ParamSequence shapeHistory;
 
     // ---------- Ceres preparation hooks (no implementation yet) ----------
 

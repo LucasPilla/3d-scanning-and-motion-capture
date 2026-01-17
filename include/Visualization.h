@@ -25,6 +25,12 @@ public:
     void write(const cv::Mat& frame);
     void drawKeypoints(cv::Mat& frame, const std::vector<Point2D>& keypoints);
 
+    // generic 2D joint drawing (for SMPL projections, etc.)
+    void drawJoints(cv::Mat& frame,
+        const std::vector<Point2D>& joints,
+        const cv::Scalar& color,
+        int radius = 4);
+
 private:
     cv::VideoWriter writer;
 };

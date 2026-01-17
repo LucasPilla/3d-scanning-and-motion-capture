@@ -186,6 +186,10 @@ bool SMPLModel::loadFromJson(const std::string& jsonPath)
         return false;
     }
 
+    // Initialize parameter vectors to match the loaded model
+    poseParams_  = Eigen::VectorXf::Zero(3 * jointRegressor_.rows());   // e.g. 24*3 = 72
+    shapeParams_ = Eigen::VectorXf::Zero(shapeBlendShapes_.cols());
+
     loaded_ = true;
     std::cout << "SMPLModel::loadFromJson - loaded model from " << jsonPath << "\n";
     return true;
@@ -364,13 +368,12 @@ Eigen::MatrixXf SMPLModel::getJointPositions() const
     Eigen::MatrixXf joints;
 
     if (!loaded_) {
-        // Return empty matrix if the model has not been loaded yet.
         return joints;
     }
 
     const int N = templateVertices_.rows();
 
-    // 1. Shape blend shapes: v_shaped
+    // 1. shape blend shapes: v_shaped
     Eigen::VectorXf beta = shapeParams_;
     Eigen::MatrixXf v_shaped = templateVertices_;
 
@@ -387,8 +390,7 @@ Eigen::MatrixXf SMPLModel::getJointPositions() const
         }
     }
 
-    // 2. Regress joints directly from (shape-deformed) vertices
-    //    This gives 3D joint positions in model/world space.
+    // 2. regress joints directly from (shape-deformed) vertices (pose ignored for now)
     joints = computeJoints(v_shaped); // (numJoints, 3)
 
     return joints;

@@ -19,6 +19,8 @@ find_package(Eigen3 REQUIRED)
 #Threads for GPU
 find_package(Threads REQUIRED)
 
+# Ceres Solver
+find_package(Ceres REQUIRED)
 
 # Add executable
 add_executable(pipeline
@@ -39,7 +41,8 @@ target_include_directories(pipeline PRIVATE
 # Link libraries
 target_link_libraries(pipeline
     ${OpenCV_LIBS}  
-    ${OpenPose_LIBS}                    
+    ${OpenPose_LIBS} 
+    Ceres::ceres                   
 )
 
 

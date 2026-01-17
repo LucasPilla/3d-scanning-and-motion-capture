@@ -57,3 +57,5 @@ models/smpl_*.json
 models/smpl_*.npz
 models/*.npz
 models/*.pkl
+
+.vscode/

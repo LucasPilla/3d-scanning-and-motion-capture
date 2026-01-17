@@ -84,6 +84,10 @@ public:
     // Simple status helper.
     bool isLoaded() const { return loaded_; }
 
+    // New helpers to expose parameter dimensionality
+    int numShapeCoeffs() const { return static_cast<int>(shapeBlendShapes_.cols()); }
+    int numPoseCoeffs() const  { return static_cast<int>(poseBlendShapes_.cols()); }
+
 private:
     using MatrixXf = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic>;
     using MatrixXi = Eigen::Matrix<int,   Eigen::Dynamic, Eigen::Dynamic>;
