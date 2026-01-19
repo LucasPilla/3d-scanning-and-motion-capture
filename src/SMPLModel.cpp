@@ -368,13 +368,12 @@ Eigen::MatrixXf SMPLModel::getJointPositions() const
     Eigen::MatrixXf joints;
 
     if (!loaded_) {
-        // Return empty matrix if the model has not been loaded yet.
         return joints;
     }
 
     const int N = templateVertices_.rows();
 
-    // 1. Shape blend shapes: v_shaped
+    // 1. shape blend shapes: v_shaped
     Eigen::VectorXf beta = shapeParams_;
     Eigen::MatrixXf v_shaped = templateVertices_;
 
@@ -391,8 +390,7 @@ Eigen::MatrixXf SMPLModel::getJointPositions() const
         }
     }
 
-    // 2. Regress joints directly from (shape-deformed) vertices
-    //    This gives 3D joint positions in model/world space.
+    // 2. regress joints directly from (shape-deformed) vertices (pose ignored for now)
     joints = computeJoints(v_shaped); // (numJoints, 3)
 
     return joints;

@@ -47,6 +47,11 @@ int main(int argc, char* argv[])
     program.add_argument("--precomputed-keypoints")
         .help("Path to pre-computed keypoints (.json)");
 
+    // Optional: process only a single frame and save debug images
+    program.add_argument("--debug-frame")
+    .help("If set, process only this 1-based frame index and save debug images")
+    .scan<'i', int>();
+
     try {
         // Parse args
         program.parse_args(argc, argv);
@@ -68,6 +73,10 @@ int main(int argc, char* argv[])
     std::optional<std::string> precomputedKeypointsPath = std::nullopt;
     if (program.is_used("--precomputed-keypoints"))
         precomputedKeypointsPath = program.get("--precomputed-keypoints");
+
+    std::optional<int> debugFrame = std::nullopt;
+    if (program.is_used("--debug-frame")) 
+        debugFrame = program.get<int>("--debug-frame");
 
     // Create output folder
     std::filesystem::create_directory(outputFolder);
@@ -119,6 +128,19 @@ int main(int argc, char* argv[])
 
         std::cout << "Processing frame " << frameIdx << "\n";
 
+        // if debug-frame is set, skip frames before it and stop after it
+        if (debugFrame.has_value()) {
+            if (frameIdx < *debugFrame) {
+                continue; 
+            }
+            if (frameIdx > *debugFrame) {
+                break;    
+            }
+        }
+
+        // keep a copy of the raw input frame for debug visualization
+        cv::Mat frameInput = frame.clone();
+
         // Extract pose
         Pose2D pose2D = poseDetector.detect(frame, frameIdx);
 
@@ -167,27 +189,110 @@ int main(int argc, char* argv[])
             offset = rootCam - smplRoot;
         }
 
+        // build camera-space joints and initial 2D projection ("before")
+        Eigen::MatrixXf jointsCam(joints3D.rows(), 3);
+        std::vector<Point2D> smplProjected(joints3D.rows());
+
         for (int i = 0; i < joints3D.rows(); ++i) {
             Eigen::Vector3f pWorld(
                 joints3D(i, 0),
                 joints3D(i, 1),
                 joints3D(i, 2)
             );
-
-            // Apply global translation so root matches OpenPose pelvis
+        
+            // apply global translation so root matches OpenPose pelvis
             Eigen::Vector3f pCam = pWorld + offset;
-
-            if (pCam.z() <= 0.0f) {
-                continue;
+            jointsCam.row(i) = pCam.transpose();
+        
+            Point2D pt; // defaults to zeros
+            if (pCam.z() > 0.0f) {
+                Eigen::Vector2f p2D = camera.project(pCam);
+                pt.x = p2D.x();
+                pt.y = p2D.y();
+                pt.score = 1.0f;
             }
+        
+            smplProjected[i] = pt;
+        }
 
-            Eigen::Vector2f p2D = camera.project(pCam);
-            cv::Point pt2D(
-                static_cast<int>(p2D.x()),
-                static_cast<int>(p2D.y())
-            );
+        // optimize a global 3D rigid transform in camera space (single-frame debug)
+        std::vector<Point2D> smplProjectedOptimized;
+        fitter.fitRigid3D(jointsCam, fx, fy, cx, cy, smplProjectedOptimized);
 
-            cv::circle(frame, pt2D, 3, cv::Scalar(255, 0, 0), -1);
+        // debug: inspect SMPL 2D projections
+        if (debugFrame.has_value() && frameIdx == *debugFrame) {
+            int validBefore = 0, validAfter = 0;
+            int inFrameBefore = 0, inFrameAfter = 0;
+        
+            int W = frame.cols;
+            int H = frame.rows;
+        
+            for (size_t i = 0; i < smplProjected.size(); ++i) {
+                const auto& pB = smplProjected[i];
+                const auto& pA = smplProjectedOptimized[i];
+        
+                if (pB.x > 0.0f && pB.y > 0.0f) {
+                    ++validBefore;
+                    if (pB.x < W && pB.y < H) ++inFrameBefore;
+                }
+                if (pA.x > 0.0f && pA.y > 0.0f) {
+                    ++validAfter;
+                    if (pA.x < W && pA.y < H) ++inFrameAfter;
+                }
+            }
+        
+            std::cout << "[Debug] Frame " << frameIdx
+                      << " SMPL valid before/after: " << validBefore << "/" << validAfter
+                      << ", in-frame before/after: " << inFrameBefore << "/" << inFrameAfter
+                      << std::endl;
+        }
+
+        // at this point we have:
+        //  frameInput: raw frame
+        //  pose2D: OpenPose joints
+        //  smplProjected: projected SMPL joints
+        if (debugFrame.has_value() && frameIdx == *debugFrame) {
+            std::string frameId = std::to_string(frameIdx);
+        
+            // raw input image
+            std::filesystem::path inputPath =
+                outputFolder / ("frame_" + frameId + "_input.png");
+            cv::imwrite(inputPath.string(), frameInput);
+        
+            // input + OpenPose keypoints
+            cv::Mat frameKeypoints = frameInput.clone();
+            visualizer.drawKeypoints(frameKeypoints, pose2D.keypoints);
+            std::filesystem::path keypointsPath =
+                outputFolder / ("frame_" + frameId + "_keypoints.png");
+            cv::imwrite(keypointsPath.string(), frameKeypoints);
+        
+            // input + OpenPose keypoints + SMPL BEFORE optimization (blue)
+            cv::Mat frameSmplBefore = frameKeypoints.clone();
+            visualizer.drawJoints(frameSmplBefore, smplProjected, cv::Scalar(255, 0, 0), 3);
+            std::filesystem::path smplBeforePath =
+                outputFolder / ("frame_" + frameId + "_smpl_before.png");
+            cv::imwrite(smplBeforePath.string(), frameSmplBefore);
+        
+            // input + OpenPose keypoints + SMPL AFTER rigid optimization (yellow)
+            cv::Mat frameSmplAfter = frameKeypoints.clone();
+            visualizer.drawJoints(frameSmplAfter, smplProjectedOptimized, cv::Scalar(0, 255, 255), 3);
+            std::filesystem::path smplAfterPath =
+                outputFolder / ("frame_" + frameId + "_smpl_after.png");
+            cv::imwrite(smplAfterPath.string(), frameSmplAfter);
+
+            // SMPL BEFORE only (no keypoints), big blue dots
+            cv::Mat frameSmplOnlyBefore = frameInput.clone();
+            visualizer.drawJoints(frameSmplOnlyBefore, smplProjected, cv::Scalar(255, 0, 0), 8);
+            std::filesystem::path smplOnlyBeforePath =
+                outputFolder / ("frame_" + frameId + "_smpl_only_before.png");
+            cv::imwrite(smplOnlyBeforePath.string(), frameSmplOnlyBefore);
+
+            // SMPL AFTER only (no keypoints), big yellow dots
+            cv::Mat frameSmplOnlyAfter = frameInput.clone();
+            visualizer.drawJoints(frameSmplOnlyAfter, smplProjectedOptimized, cv::Scalar(0, 255, 255), 8);
+            std::filesystem::path smplOnlyAfterPath =
+                outputFolder / ("frame_" + frameId + "_smpl_only_after.png");
+            cv::imwrite(smplOnlyAfterPath.string(), frameSmplOnlyAfter);
         }
 
         // // Save mesh
@@ -196,9 +301,16 @@ int main(int argc, char* argv[])
         // std::filesystem::path meshPath = outputFolder / meshFilename.str();
         // mesh.save(meshPath);
     
-        // Write output frame
+        // draw OpenPose BODY_25 skeleton
         visualizer.drawKeypoints(frame, pose2D.keypoints);
+        // draw SMPL projected joints in a distinct color
+        visualizer.drawJoints(frame, smplProjected, cv::Scalar(255, 0, 0), 3);
+        // write the frame
         visualizer.write(frame);
+
+        if (debugFrame.has_value() && frameIdx == *debugFrame) {
+            break;
+        }
     }
 
     std::cout << "Output written to output.mp4\n";

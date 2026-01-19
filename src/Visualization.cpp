@@ -99,3 +99,23 @@ void Visualization::drawKeypoints(cv::Mat& frame, const std::vector<Point2D>& ke
         cv::circle(frame, cv::Point(pt.x, pt.y), keypoint_radius, keypoint_color, -1);
     }
 }
+
+void Visualization::drawJoints(cv::Mat& frame,
+                            const std::vector<Point2D>& joints,
+                            const cv::Scalar& color,
+                            int radius)
+{
+    for (const auto& pt : joints) {
+        // skip invalid coordinates
+        if (pt.x <= 0.0f || pt.y <= 0.0f) {
+            continue;
+        }
+
+        cv::Point cvPt(
+            static_cast<int>(pt.x),
+            static_cast<int>(pt.y)
+        );
+
+        cv::circle(frame, cvPt, radius, color, -1);
+    }
+}
