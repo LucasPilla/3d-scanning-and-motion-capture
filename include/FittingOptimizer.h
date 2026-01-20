@@ -17,6 +17,7 @@
 #include <Eigen/Dense>
 #include "PoseDetector.h"
 #include "TemporalSmoother.h"
+#include "CameraModel.h"
 
 // TODO: Implement SMPLModel in SMPLModel.h / SMPLModel.cpp
 class SMPLModel;
@@ -38,31 +39,29 @@ public:
         bool freezeShapeParameters    = false;
     };
 
-    explicit FittingOptimizer(SMPLModel* smplModel,
-                              const Options& options);
+    explicit FittingOptimizer(
+        SMPLModel* smplModel,
+        CameraModel* cameraModel,                  
+        const Options& options
+    );
 
     // Fit SMPL parameters to a single frame of 2D joints
     //
     // NOTE: In this step, this function will not run any optimization
     // It will just prepare data & placeholders
-    void fitFrame(const Pose2D& observation);
+    std::vector<Point2D> fitFrame(const Pose2D& observation);
 
     // TODO: Add getters to retrieve the fitted pose/shape
     // for the last processed frame, e.g.:
     //   const std::vector<double>& getPoseParams() const;
     //   const std::vector<double>& getShapeParams() const;
 
-    // debug: fit a global 2D translation (dx, dy) so that projected SMPL 2D joints
-    // align better with the current OpenPose detections for this frame
-    void fit2DTranslation(const std::vector<Point2D>& smpl2D,
-        double& outDx,
-        double& outDy);
-
     // debug: fit a global 3D rigid transform (R, t) in camera space so that
     // SMPL 3D joints align better with OpenPose 2D detections
-    void fitRigid3D(const Eigen::MatrixXd& smplJointsCam,
-                    double fx, double fy, double cx, double cy,
-                    std::vector<Point2D>& smpl2DOut);
+    void fitRigid3D(
+        const Pose2D& observation,
+        std::vector<Point2D>& smpl2DOut
+    );
 
 private:
     // Configuration flags (see Options above).
@@ -79,8 +78,11 @@ private:
     // SMPL shape parameters (e.g., 10 betas)
     std::vector<double> shapeParams;
 
-    // Pointer to SMPL model used for projecting 3D joints
+    // Pointer to SMPL model
     SMPLModel* smplModel = nullptr;
+
+    // Pointer to camera model
+    CameraModel* cameraModel = nullptr;
 
     // History of parameters for temporal smoothing / regularization
     TemporalSmoother smoother;
