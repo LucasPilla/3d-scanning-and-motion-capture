@@ -60,8 +60,8 @@ public:
 
     // debug: fit a global 3D rigid transform (R, t) in camera space so that
     // SMPL 3D joints align better with OpenPose 2D detections
-    void fitRigid3D(const Eigen::MatrixXf& smplJointsCam,
-                    float fx, float fy, float cx, float cy,
+    void fitRigid3D(const Eigen::MatrixXd& smplJointsCam,
+                    double fx, double fy, double cx, double cy,
                     std::vector<Point2D>& smpl2DOut);
 
 private:

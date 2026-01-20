@@ -1,28 +1,18 @@
-// SMPLModel
+// SMPLModel.h
 // ----------
 // Interface for the SMPL (Skinned Multi-Person Linear) parametric body model.
 // Responsibilities:
-//  - Load SMPL model data (shape blend shapes, pose blend shapes, joint regressor)
-//  - Convert pose + shape parameters into a 3D mesh
-//  - Provide 3D joint locations for optimization
+//  - Load SMPL model data
+//  - Reconstruct mesh from pose and shape parameters
 // Used by:
 //  - FittingOptimizer
 //  - Visualization
 // ----------
-// NOTE on dependencies:
-//  - The implementation in SMPLModel.cpp will use Eigen for linear algebra
-//    and 'nlohmann::json' (single-header JSON library) to parse the SMPL
-//    JSON file produced by preprocess.py. Make sure that:
-//      * Eigen headers are available (Dockerfile already installs libeigen3-dev).
-//      * The file 'json.hpp' from nlohmann/json is in your include path,
-//        e.g. under 'include/third_party/json.hpp' or 'include/json.hpp'.
-//        SMPLModel.cpp will include it as:  #include <nlohmann/json.hpp>
 
 #pragma once
 
 #include <vector>
 #include <string>
-
 #include <Eigen/Dense>
 
 // A simple mesh container for SMPL output.
@@ -55,84 +45,77 @@ public:
     //   - "shape_blend_shapes" : (6890, 3, 10)
     //   - "pose_blend_shapes"  : (6890, 3, 207)
     //   - "joint_regressor"    : (24, 6890)
-    //   - "weights"            : (6890, 24)          [may be used later]
-    //   - "kinematic_tree"     : (2, 24)             [may be used later]
-    
-    // Returns true on success, false on failure.
+    //   - "weights"            : (6890, 24)
+    //   - "kinematic_tree"     : (2, 24)
     bool loadFromJson(const std::string& jsonPath);
 
     // Set SMPL pose parameters (e.g. 72 axis-angle parameters).
-    //
-    // For this week, these values are stored but NOT yet used to deform the mesh.
     void setPose(const std::vector<double>& poseParams);
 
     // Set SMPL shape parameters (e.g. 10 betas).
-    //
-    // For this week, these values are stored but NOT yet used to deform the mesh.
     void setShape(const std::vector<double>& shapeParams);
 
-    // Get the current mesh.
-    //
-    // For first week:
-    //   - This will simply return the template mesh (no pose/shape deformation yet).
-    //   - Later, it will apply shape & pose blendshapes and skinning.
+    // Get the current mesh based on pose and shape parameters.
     SMPLMesh getMesh() const;
 
     // Get posed 3D joint positions (one row per joint, columns = x,y,z).
-    Eigen::MatrixXf getJointPositions() const;
+    // Updated to return MatrixXd for precision compatibility with optimization.
+    Eigen::MatrixXd getJointPositions() const;
 
-    // Simple status helper.
-    bool isLoaded() const { return loaded_; }
-
-    // New helpers to expose parameter dimensionality
-    int numShapeCoeffs() const { return static_cast<int>(shapeBlendShapes_.cols()); }
-    int numPoseCoeffs() const  { return static_cast<int>(poseBlendShapes_.cols()); }
+    // These return const references to the SMPL model data,
+    // allowing external cost functors to access them efficiently for optimization.
+    const Eigen::MatrixXd& getTemplateVertices() const { return templateVertices_; }
+    const Eigen::MatrixXd& getShapeBlendShapes() const { return shapeBlendShapes_; }
+    const Eigen::MatrixXd& getPoseBlendShapes() const  { return poseBlendShapes_; }
+    const Eigen::MatrixXd& getJointRegressor() const   { return jointRegressor_; }
+    const Eigen::MatrixXd& getWeights() const          { return weights_; }
+    const Eigen::MatrixXi& getKinematicTree() const    { return kinematicTree_; }
+    const Eigen::MatrixXi& getFaces() const            { return faces_; }
 
 private:
-    using MatrixXf = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic>;
+
+    using MatrixXd = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>;
     using MatrixXi = Eigen::Matrix<int,   Eigen::Dynamic, Eigen::Dynamic>;
 
     // --------- Model data (loaded from JSON) ---------
 
     // (numVertices, 3)
-    MatrixXf templateVertices_;
+    MatrixXd templateVertices_;
 
     // (numFaces, 3) triangle indices
     MatrixXi faces_;
 
     // Shape blendshapes, flattened as (numVertices * 3, numShapeCoeffs)
-    MatrixXf shapeBlendShapes_;
+    MatrixXd shapeBlendShapes_;
 
     // Pose blendshapes, flattened as (numVertices * 3, numPoseCoeffs)
-    MatrixXf poseBlendShapes_;
+    MatrixXd poseBlendShapes_;
 
     // Joint regressor: (numJoints, numVertices)
-    MatrixXf jointRegressor_;
+    MatrixXd jointRegressor_;
 
     // Weights: (numVertices, numJoints)
-    MatrixXf weights_;
+    MatrixXd weights_;
 
     // Kinematic Tree: (2, numJoints)
     MatrixXi kinematicTree_;      
 
-    // --------- Current parameters ---------
-
-    Eigen::VectorXf poseParams_ = Eigen::VectorXf::Zero(72);  
-    Eigen::VectorXf shapeParams_ = Eigen::VectorXf::Zero(10);
-    bool loaded_ = false;
+    // --------- SMPL parameters ---------
+    Eigen::VectorXd poseParams_ = Eigen::VectorXd::Zero(72);  
+    Eigen::VectorXd shapeParams_ = Eigen::VectorXd::Zero(10);
 
     // --- SMPL internal helpers ---
 
     // Rodrigues rotation: axis-angle (3,) → rotation matrix (3x3)
-    Eigen::Matrix3f rodrigues(const Eigen::Vector3f& r) const;
+    Eigen::Matrix3d rodrigues(const Eigen::Vector3d& r) const;
 
     // Compute joint locations from vertices
-    Eigen::MatrixXf computeJoints(const Eigen::MatrixXf& vertices) const;
+    Eigen::MatrixXd computeJoints(const Eigen::MatrixXd& vertices) const;
 
     // Compute global joint transforms (4x4 matrices)
-    std::vector<Eigen::Matrix4f> computeGlobalTransforms(
-        const Eigen::MatrixXf& J,
-        const std::vector<Eigen::Matrix3f>& rotations
+    std::vector<Eigen::Matrix4d> computeGlobalTransforms(
+        const Eigen::MatrixXd& J,
+        const std::vector<Eigen::Matrix3d>& rotations
     ) const;
 
 };

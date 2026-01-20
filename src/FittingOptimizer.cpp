@@ -156,11 +156,6 @@ FittingOptimizer::FittingOptimizer(SMPLModel* smplModel_,
     int numPose  = 72;
     int numShape = 10;
 
-    if (smplModel && smplModel->isLoaded()) {
-        numPose  = smplModel->numPoseCoeffs();
-        numShape = smplModel->numShapeCoeffs();
-    }
-
     poseParams.assign(numPose,  0.0);
     shapeParams.assign(numShape, 0.0);
 
@@ -222,13 +217,8 @@ void FittingOptimizer::addReprojectionTerms()
     //      * Add a reprojection error residual block
     //  - Define a cost functor that compares projected vs. observed 2D joint
 
-    if (!smplModel || !smplModel->isLoaded()) {
-        std::cout << "[Reprojection] SMPL model not loaded\n";
-        return;
-    }
-
     // Get 3D SMPL joints (Nx3)
-    Eigen::MatrixXf smplJoints = smplModel->getJointPositions();
+    Eigen::MatrixXd smplJoints = smplModel->getJointPositions();
 
     // Simple pinhole camera (temporary values)
     CameraModel camera(
@@ -254,13 +244,13 @@ void FittingOptimizer::addReprojectionTerms()
         if (kp.score < 0.2f)
             continue;
 
-        Eigen::Vector3f joint3D = smplJoints.row(smplIdx);
+        Eigen::Vector3d joint3D = smplJoints.row(smplIdx);
 
         // Skip points behind the camera
         if (joint3D.z() <= 0)
             continue;
 
-        Eigen::Vector2f projected = camera.project(joint3D);
+        Eigen::Vector2d projected = camera.project(joint3D);
 
         double dx = projected.x() - kp.x;
         double dy = projected.y() - kp.y;
@@ -375,8 +365,8 @@ void FittingOptimizer::fit2DTranslation(const std::vector<Point2D>& smpl2D,
     outDy = t[1];
 }
 
-void FittingOptimizer::fitRigid3D(const Eigen::MatrixXf& smplJointsCam,
-                                  float fx, float fy, float cx, float cy,
+void FittingOptimizer::fitRigid3D(const Eigen::MatrixXd& smplJointsCam,
+                                  double fx, double fy, double cx, double cy,
                                   std::vector<Point2D>& smpl2DOut)
 {
     smpl2DOut.assign(smplJointsCam.rows(), Point2D{});

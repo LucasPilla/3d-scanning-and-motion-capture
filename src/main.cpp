@@ -91,10 +91,10 @@ int main(int argc, char* argv[])
     Visualization visualizer(loader.width(), loader.height(), loader.fps());
 
     // Initialize simple pinhole camera intrinsics (approximate)
-    float fx = static_cast<float>(loader.width());
-    float fy = static_cast<float>(loader.width()); // assume square pixels, fx ~ fy
-    float cx = fx / 2.0f;
-    float cy = static_cast<float>(loader.height()) / 2.0f;
+    double fx = static_cast<double>(loader.width());
+    double fy = static_cast<double>(loader.width()); // assume square pixels, fx ~ fy
+    double cx = fx / 2.0f;
+    double cy = static_cast<double>(loader.height()) / 2.0f;
     CameraModel camera(fx, fy, cx, cy);
 
     // Load SMPL model (preprocessed JSON).
@@ -105,7 +105,7 @@ int main(int argc, char* argv[])
 
     // Configure optimizer fitting options (flags).
     FittingOptimizer::Options fitOpts;
-    fitOpts.temporalRegularization = true;
+    fitOpts.temporalRegularization = false;
     fitOpts.warmStarting           = false;
     fitOpts.freezeShapeParameters  = false;
 
@@ -118,13 +118,6 @@ int main(int argc, char* argv[])
     while (loader.readFrame(frame)) {
 
         frameIdx++;
-
-        // // During initial development let's work with a small range of frames.
-        // int startFrame = 1;
-        // int endFrame   = 100;
-
-        // if (frameCounter < startFrame) continue;
-        // if (frameCounter >= endFrame) break;
 
         std::cout << "Processing frame " << frameIdx << "\n";
 
@@ -151,7 +144,7 @@ int main(int argc, char* argv[])
         SMPLMesh mesh = smplModel.getMesh();
 
         // Project SMPL joints to image using the camera model (debug visualization)
-        Eigen::MatrixXf joints3D = smplModel.getJointPositions();
+        Eigen::MatrixXd joints3D = smplModel.getJointPositions();
 
         // BODY_25 index for MidHip in OpenPose
         const int MID_HIP_2D = 8;
@@ -162,24 +155,24 @@ int main(int argc, char* argv[])
             pose2D.keypoints.size() > MID_HIP_2D &&
             pose2D.keypoints[MID_HIP_2D].score > 0.1f;
 
-        Eigen::Vector3f offset = Eigen::Vector3f::Zero();
+        Eigen::Vector3d offset = Eigen::Vector3d::Zero();
 
         if (canAlignRoot) {
             // 2D pelvis from OpenPose
             Point2D root2D = pose2D.keypoints[MID_HIP_2D];
 
             // Choose a nominal depth (meters) for the person
-            float z0 = 3.0f;
+            double z0 = 3.0f;
 
             // Desired camera-space position of pelvis
-            Eigen::Vector3f rootCam(
+            Eigen::Vector3d rootCam(
                 (root2D.x - cx) / fx * z0,
                 (root2D.y - cy) / fy * z0,
                 z0
             );
 
             // Current SMPL root in model space
-            Eigen::Vector3f smplRoot(
+            Eigen::Vector3d smplRoot(
                 joints3D(ROOT_3D, 0),
                 joints3D(ROOT_3D, 1),
                 joints3D(ROOT_3D, 2)
@@ -190,23 +183,23 @@ int main(int argc, char* argv[])
         }
 
         // build camera-space joints and initial 2D projection ("before")
-        Eigen::MatrixXf jointsCam(joints3D.rows(), 3);
+        Eigen::MatrixXd jointsCam(joints3D.rows(), 3);
         std::vector<Point2D> smplProjected(joints3D.rows());
 
         for (int i = 0; i < joints3D.rows(); ++i) {
-            Eigen::Vector3f pWorld(
+            Eigen::Vector3d pWorld(
                 joints3D(i, 0),
                 joints3D(i, 1),
                 joints3D(i, 2)
             );
         
             // apply global translation so root matches OpenPose pelvis
-            Eigen::Vector3f pCam = pWorld + offset;
+            Eigen::Vector3d pCam = pWorld + offset;
             jointsCam.row(i) = pCam.transpose();
         
             Point2D pt; // defaults to zeros
             if (pCam.z() > 0.0f) {
-                Eigen::Vector2f p2D = camera.project(pCam);
+                Eigen::Vector2d p2D = camera.project(pCam);
                 pt.x = p2D.x();
                 pt.y = p2D.y();
                 pt.score = 1.0f;
