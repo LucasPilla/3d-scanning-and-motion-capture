@@ -145,19 +145,19 @@ int main(int argc, char* argv[])
         if (debugFrame.has_value() && frameIdx == *debugFrame) {
             std::string frameId = std::to_string(frameIdx);
         
-            // frame
-            std::filesystem::path inputPath =
-                outputFolder / ("frame_" + frameId + "_input.png");
-            cv::imwrite(inputPath.string(), frameInput);
+            // // frame
+            // std::filesystem::path inputPath =
+            //     outputFolder / ("frame_" + frameId + "_input.png");
+            // cv::imwrite(inputPath.string(), frameInput);
         
             // frame + openpose
             cv::Mat frameKeypoints = frameInput.clone();
-            visualizer.drawKeypoints(frameKeypoints, pose2D.keypoints);
-            std::filesystem::path keypointsPath =
-                outputFolder / ("frame_" + frameId + "_keypoints.png");
-            cv::imwrite(keypointsPath.string(), frameKeypoints);
+            // visualizer.drawKeypoints(frameKeypoints, pose2D.keypoints);
+            // std::filesystem::path keypointsPath =
+            //     outputFolder / ("frame_" + frameId + "_keypoints.png");
+            // cv::imwrite(keypointsPath.string(), frameKeypoints);
         
-            // frame + openpose + optimizer results
+            // frame + openpose + optimized joints
             cv::Mat frameSmplAfter = frameKeypoints.clone();
             visualizer.drawJoints(frameSmplAfter, results, cv::Scalar(0, 255, 255), 3);
             std::filesystem::path smplAfterPath =
