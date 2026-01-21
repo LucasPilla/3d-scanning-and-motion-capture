@@ -3,7 +3,6 @@
 // Implements the SMPLModel interface defined in SMPLModel.h.
 
 #include "SMPLModel.h"
-#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <nlohmann/json.hpp>
@@ -13,394 +12,334 @@ using nlohmann::json;
 bool SMPLMesh::save(const std::string &path) const
 {
 
-    std::ofstream outFile(path);
-    if (!outFile.is_open())
-    {
-        std::cerr << "Error: Could not open file for writing: " << path
-                  << std::endl;
-        return false;
-    }
+	std::ofstream outFile(path);
+	if (!outFile.is_open())
+	{
+		std::cerr << "Error: Could not open file for writing: " << path
+				  << std::endl;
+		return false;
+	}
 
-    // 1. Save vertices (v x y z)
-    for (const auto &vertex : vertices)
-    {
-        if (vertex.allFinite())
-        {
-            outFile << "v " << vertex.x() << " " << vertex.y() << " " << vertex.z()
-                    << "\n";
-        }
-        else
-        {
-            outFile << "v 0.0 0.0 0.0\n";
-        }
-    }
+	// 1. Save vertices (v x y z)
+	for (const auto &vertex : vertices)
+	{
+		if (vertex.allFinite())
+		{
+			outFile << "v " << vertex.x() << " " << vertex.y() << " " << vertex.z()
+					<< "\n";
+		}
+		else
+		{
+			outFile << "v 0.0 0.0 0.0\n";
+		}
+	}
 
-    // 2. Save faces (f v1 v2 v3) - OBJ is 1-indexed!
-    for (const auto &face : faces)
-    {
-        outFile << "f " << face[0] + 1 << " " << face[1] + 1 << " " << face[2] + 1
-                << "\n";
-    }
+	// 2. Save faces (f v1 v2 v3) - OBJ is 1-indexed!
+	for (const auto &face : faces)
+	{
+		outFile << "f " << face[0] + 1 << " " << face[1] + 1 << " " << face[2] + 1
+				<< "\n";
+	}
 
-    outFile.close();
-    return true;
+	outFile.close();
+	return true;
 }
 
 bool SMPLModel::loadFromJson(const std::string &jsonPath)
 {
 
-    std::ifstream in(jsonPath);
-    if (!in.is_open())
-    {
-        std::cerr << "SMPLModel::loadFromJson - cannot open file: " << jsonPath
-                  << "\n";
-        return false;
-    }
+	std::ifstream in(jsonPath);
+	if (!in.is_open())
+	{
+		std::cerr << "SMPLModel::loadFromJson - cannot open file: " << jsonPath
+				  << "\n";
+		return false;
+	}
 
-    json j;
-    try
-    {
-        in >> j;
-    }
-    catch (const std::exception &e)
-    {
-        std::cerr << "SMPLModel::loadFromJson - JSON parse error: " << e.what()
-                  << "\n";
-        return false;
-    }
+	json j;
+	try
+	{
+		in >> j;
+	}
+	catch (const std::exception &e)
+	{
+		std::cerr << "SMPLModel::loadFromJson - JSON parse error: " << e.what()
+				  << "\n";
+		return false;
+	}
 
-    try
-    {
-        // -------- vertices_template (N, 3) --------
-        const auto &vt = j.at("vertices_template");
-        const int numVertices = static_cast<int>(vt.size());
-        if (numVertices == 0 || vt.at(0).size() != 3)
-        {
-            std::cerr
-                << "SMPLModel::loadFromJson - invalid vertices_template shape\n";
-            return false;
-        }
+	try
+	{
+		// -------- vertices_template (N, 3) --------
+		const auto &vt = j.at("vertices_template");
+		const int numVertices = static_cast<int>(vt.size());
+		if (numVertices == 0 || vt.at(0).size() != 3)
+		{
+			std::cerr
+				<< "SMPLModel::loadFromJson - invalid vertices_template shape\n";
+			return false;
+		}
 
-        templateVertices_.resize(numVertices, 3);
-        for (int i = 0; i < numVertices; ++i)
-        {
-            for (int c = 0; c < 3; ++c)
-            {
-                templateVertices_(i, c) = static_cast<double>(vt[i][c]);
-            }
-        }
+		templateVertices_.resize(numVertices, 3);
+		for (int i = 0; i < numVertices; ++i)
+		{
+			for (int c = 0; c < 3; ++c)
+			{
+				templateVertices_(i, c) = static_cast<double>(vt[i][c]);
+			}
+		}
 
-        // -------- face_indices (F, 3) --------
-        const auto &faces = j.at("face_indices");
-        const int numFaces = static_cast<int>(faces.size());
-        faces_.resize(numFaces, 3);
-        for (int i = 0; i < numFaces; ++i)
-        {
-            for (int c = 0; c < 3; ++c)
-            {
-                // preprocess.py stores 1-based indices; convert to 0-based for C++
-                int idx = static_cast<int>(faces[i][c]) - 1;
-                faces_(i, c) = idx;
-            }
-        }
+		// -------- face_indices (F, 3) --------
+		const auto &faces = j.at("face_indices");
+		const int numFaces = static_cast<int>(faces.size());
+		faces_.resize(numFaces, 3);
+		for (int i = 0; i < numFaces; ++i)
+		{
+			for (int c = 0; c < 3; ++c)
+			{
+				// preprocess.py stores 1-based indices; convert to 0-based for C++
+				int idx = static_cast<int>(faces[i][c]) - 1;
+				faces_(i, c) = idx;
+			}
+		}
 
-        // -------- shape_blend_shapes (N, 3, numShapeCoeffs) --------
-        const auto &shapeBs = j.at("shape_blend_shapes");
-        const int numShapeVerts = static_cast<int>(shapeBs.size()); // should be N
-        const int numShapeComps =
-            static_cast<int>(shapeBs[0].size()); // should be 3
-        const int numShapeCoeffs =
-            static_cast<int>(shapeBs[0][0].size()); // e.g. 10
+		// -------- shape_blend_shapes (N, 3, numShapeCoeffs) --------
+		const auto &shapeBs = j.at("shape_blend_shapes");
+		const int numShapeVerts = static_cast<int>(shapeBs.size()); // should be N
+		const int numShapeComps =
+			static_cast<int>(shapeBs[0].size()); // should be 3
+		const int numShapeCoeffs =
+			static_cast<int>(shapeBs[0][0].size()); // e.g. 10
 
-        if (numShapeVerts != numVertices || numShapeComps != 3)
-        {
-            std::cerr
-                << "SMPLModel::loadFromJson - invalid shape_blend_shapes shape\n";
-            return false;
-        }
+		if (numShapeVerts != numVertices || numShapeComps != 3)
+		{
+			std::cerr
+				<< "SMPLModel::loadFromJson - invalid shape_blend_shapes shape\n";
+			return false;
+		}
 
-        shapeBlendShapes_.resize(numVertices * 3, numShapeCoeffs);
-        for (int v = 0; v < numVertices; ++v)
-        {
-            for (int c = 0; c < 3; ++c)
-            {
-                int row = v * 3 + c;
-                for (int k = 0; k < numShapeCoeffs; ++k)
-                {
-                    shapeBlendShapes_(row, k) = static_cast<double>(shapeBs[v][c][k]);
-                }
-            }
-        }
+		shapeBlendShapes_.resize(numVertices * 3, numShapeCoeffs);
+		for (int v = 0; v < numVertices; ++v)
+		{
+			for (int c = 0; c < 3; ++c)
+			{
+				int row = v * 3 + c;
+				for (int k = 0; k < numShapeCoeffs; ++k)
+				{
+					shapeBlendShapes_(row, k) = static_cast<double>(shapeBs[v][c][k]);
+				}
+			}
+		}
 
-        // NOTE: In SMPL, posedirs/pose_blend_shapes is stored as a 3D tensor
-        // (numVertices, 3, numPoseCoeffs). We flatten it row-wise to a
-        // (numVertices * 3, numPoseCoeffs) matrix here.
-        // -------- pose_blend_shapes (N, 3, numPoseCoeffs) --------
-        const auto &poseBs = j.at("pose_blend_shapes");
-        const int numPoseVerts = static_cast<int>(poseBs.size());
-        const int numPoseComps = static_cast<int>(poseBs[0].size());
-        const int numPoseCoeffs = static_cast<int>(poseBs[0][0].size()); // e.g. 207
+		// NOTE: In SMPL, posedirs/pose_blend_shapes is stored as a 3D tensor
+		// (numVertices, 3, numPoseCoeffs). We flatten it row-wise to a
+		// (numVertices * 3, numPoseCoeffs) matrix here.
+		// -------- pose_blend_shapes (N, 3, numPoseCoeffs) --------
+		const auto &poseBs = j.at("pose_blend_shapes");
+		const int numPoseVerts = static_cast<int>(poseBs.size());
+		const int numPoseComps = static_cast<int>(poseBs[0].size());
+		const int numPoseCoeffs = static_cast<int>(poseBs[0][0].size()); // e.g. 207
 
-        if (numPoseVerts != numVertices || numPoseComps != 3)
-        {
-            std::cerr
-                << "SMPLModel::loadFromJson - invalid pose_blend_shapes shape\n";
-            return false;
-        }
+		if (numPoseVerts != numVertices || numPoseComps != 3)
+		{
+			std::cerr
+				<< "SMPLModel::loadFromJson - invalid pose_blend_shapes shape\n";
+			return false;
+		}
 
-        poseBlendShapes_.resize(numVertices * 3, numPoseCoeffs);
-        for (int v = 0; v < numVertices; ++v)
-        {
-            for (int c = 0; c < 3; ++c)
-            {
-                int row = v * 3 + c;
-                for (int k = 0; k < numPoseCoeffs; ++k)
-                {
-                    poseBlendShapes_(row, k) = static_cast<double>(poseBs[v][c][k]);
-                }
-            }
-        }
+		poseBlendShapes_.resize(numVertices * 3, numPoseCoeffs);
+		for (int v = 0; v < numVertices; ++v)
+		{
+			for (int c = 0; c < 3; ++c)
+			{
+				int row = v * 3 + c;
+				for (int k = 0; k < numPoseCoeffs; ++k)
+				{
+					poseBlendShapes_(row, k) = static_cast<double>(poseBs[v][c][k]);
+				}
+			}
+		}
 
-        // -------- joint_regressor (numJoints, N) --------
-        const auto &jr = j.at("joint_regressor");
-        const int numJoints = static_cast<int>(jr.size());
-        if (numJoints == 0 || static_cast<int>(jr[0].size()) != numVertices)
-        {
-            std::cerr << "SMPLModel::loadFromJson - invalid joint_regressor shape\n";
-            return false;
-        }
+		// -------- joint_regressor (numJoints, N) --------
+		const auto &jr = j.at("joint_regressor");
+		const int numJoints = static_cast<int>(jr.size());
+		if (numJoints == 0 || static_cast<int>(jr[0].size()) != numVertices)
+		{
+			std::cerr << "SMPLModel::loadFromJson - invalid joint_regressor shape\n";
+			return false;
+		}
 
-        jointRegressor_.resize(numJoints, numVertices);
-        for (int jIdx = 0; jIdx < numJoints; ++jIdx)
-        {
-            for (int v = 0; v < numVertices; ++v)
-            {
-                jointRegressor_(jIdx, v) = static_cast<double>(jr[jIdx][v]);
-            }
-        }
+		jointRegressor_.resize(numJoints, numVertices);
+		for (int jIdx = 0; jIdx < numJoints; ++jIdx)
+		{
+			for (int v = 0; v < numVertices; ++v)
+			{
+				jointRegressor_(jIdx, v) = static_cast<double>(jr[jIdx][v]);
+			}
+		}
 
-        // -------- kinematic_tree (2, numJoints) --------
-        const auto &kt = j.at("kinematic_tree");
-        const int ktRows = static_cast<int>(kt.size());    // Expected: 2
-        const int ktCols = static_cast<int>(kt[0].size()); // Expected: numJoints (24)
+		// -------- kinematic_tree (2, numJoints) --------
+		const auto &kt = j.at("kinematic_tree");
+		const int ktRows = static_cast<int>(kt.size()); // Expected: 2
+		const int ktCols =
+			static_cast<int>(kt[0].size()); // Expected: numJoints (24)
 
-        kinematicTree_.resize(ktRows, ktCols);
-        for (int r = 0; r < ktRows; ++r)
-        {
-            for (int c = 0; c < ktCols; ++c)
-            {
-                kinematicTree_(r, c) = static_cast<int>(kt[r][c]);
-            }
-        }
+		kinematicTree_.resize(ktRows, ktCols);
+		for (int r = 0; r < ktRows; ++r)
+		{
+			for (int c = 0; c < ktCols; ++c)
+			{
+				kinematicTree_(r, c) = static_cast<int>(kt[r][c]);
+			}
+		}
 
-        // -------- weights (N, numJoints) --------
-        const auto &w = j.at("weights");
-        if (static_cast<int>(w.size()) != numVertices)
-        {
-            std::cerr << "SMPLModel::loadFromJson - invalid weights shape\n";
-            return false;
-        }
+		// -------- weights (N, numJoints) --------
+		const auto &w = j.at("weights");
+		if (static_cast<int>(w.size()) != numVertices)
+		{
+			std::cerr << "SMPLModel::loadFromJson - invalid weights shape\n";
+			return false;
+		}
 
-        weights_.resize(numVertices, numJoints);
-        for (int v = 0; v < numVertices; ++v)
-        {
-            for (int jIdx = 0; jIdx < numJoints; ++jIdx)
-            {
-                weights_(v, jIdx) = static_cast<double>(w[v][jIdx]);
-            }
-        }
-    }
-    catch (const std::exception &e)
-    {
-        std::cerr << "SMPLModel::loadFromJson - error while reading arrays: " << e.what() << "\n";
-        return false;
-    }
+		weights_.resize(numVertices, numJoints);
+		for (int v = 0; v < numVertices; ++v)
+		{
+			for (int jIdx = 0; jIdx < numJoints; ++jIdx)
+			{
+				weights_(v, jIdx) = static_cast<double>(w[v][jIdx]);
+			}
+		}
+	}
+	catch (const std::exception &e)
+	{
+		std::cerr << "SMPLModel::loadFromJson - error while reading arrays: "
+				  << e.what() << "\n";
+		return false;
+	}
 
-    // Initialize parameter vectors
-    poseParams_ = Eigen::VectorXd::Zero(3 * jointRegressor_.rows());
-    shapeParams_ = Eigen::VectorXd::Zero(shapeBlendShapes_.cols());
+	// Initialize parameter vectors
+	poseParams_ = Eigen::VectorXd::Zero(3 * jointRegressor_.rows());
+	shapeParams_ = Eigen::VectorXd::Zero(shapeBlendShapes_.cols());
 
-    std::cout << "SMPLModel::loadFromJson - loaded model from " << jsonPath << "\n";
+	std::cout << "SMPLModel::loadFromJson - loaded model from " << jsonPath
+			  << "\n";
 
-    return true;
+	return true;
 }
 
 void SMPLModel::setPose(const std::vector<double> &poseParams)
 {
-    poseParams_.resize(static_cast<int>(poseParams.size()));
-    for (int i = 0; i < static_cast<int>(poseParams.size()); ++i)
-    {
-        poseParams_[i] = static_cast<double>(poseParams[i]);
-    }
+	poseParams_.resize(static_cast<int>(poseParams.size()));
+	for (int i = 0; i < static_cast<int>(poseParams.size()); ++i)
+	{
+		poseParams_[i] = static_cast<double>(poseParams[i]);
+	}
 }
 
 void SMPLModel::setShape(const std::vector<double> &shapeParams)
 {
-    shapeParams_.resize(static_cast<int>(shapeParams.size()));
-    for (int i = 0; i < static_cast<int>(shapeParams.size()); ++i)
-    {
-        shapeParams_[i] = static_cast<double>(shapeParams[i]);
-    }
+	shapeParams_.resize(static_cast<int>(shapeParams.size()));
+	for (int i = 0; i < static_cast<int>(shapeParams.size()); ++i)
+	{
+		shapeParams_[i] = static_cast<double>(shapeParams[i]);
+	}
 }
 
 SMPLMesh SMPLModel::computeMesh() const
 {
-    SMPLMesh mesh;
+	SMPLMesh mesh;
 
-    const int N = templateVertices_.rows();
-    const int numJoints = jointRegressor_.rows();
+	const int N = templateVertices_.rows();
+	const int numJoints = jointRegressor_.rows();
 
-    // 1. Shape blend shapes
-    Eigen::VectorXd beta = shapeParams_;
-    Eigen::Matrix<double, Eigen::Dynamic, 3> v_shaped(N, 3);
-    v_shaped = templateVertices_;
+	// 1. Apply shape: get v_shaped and J_rest
+	Eigen::Matrix<double, 10, 1> beta;
+	for (int i = 0; i < 10; ++i)
+	{
+		beta(i) = shapeParams_(i);
+	}
+	auto shapeResult = applyShape<double>(beta);
+	const auto &v_shaped = shapeResult.shapedVertices;
+	const auto &J = shapeResult.restJoints;
 
-    if (beta.size() > 0)
-    {
-        if (shapeBlendShapes_.cols() == beta.size())
-        {
-            Eigen::VectorXd shape_offset = shapeBlendShapes_ * beta;
-            v_shaped += Eigen::Map<
-                const Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor>>(
-                shape_offset.data(), N, 3);
-        }
-        else
-        {
-            std::cerr
-                << "SMPLModel::getMesh - shape_blend_shapes dimension mismatch: "
-                << shapeBlendShapes_.rows() << "x" << shapeBlendShapes_.cols()
-                << " vs beta size " << beta.size() << std::endl;
-        }
-    }
+	// 2. Apply pose: get rotations, G_rot, G_trans
+	Eigen::Matrix<double, 72, 1> theta;
+	for (int i = 0; i < 72; ++i)
+	{
+		theta(i) = poseParams_(i);
+	}
+	auto poseResult = applyPose<double>(theta, J);
 
-    // 2. Joint regression - use templated version directly
-    Eigen::Matrix<double, Eigen::Dynamic, 3> J =
-        SMPLModel::computeJoints<double>(jointRegressor_, v_shaped);
+	// 3. Pose blend shapes (uses rotations from poseResult)
+	Eigen::VectorXd pose_map((numJoints - 1) * 9);
+	for (int i = 1; i < numJoints; ++i)
+	{
+		Eigen::Matrix3d diff =
+			poseResult.rotations[i] - Eigen::Matrix3d::Identity();
+		Eigen::Matrix<double, 3, 3, Eigen::RowMajor> rowMajorDiff = diff;
+		Eigen::Map<Eigen::VectorXd>(pose_map.data() + (i - 1) * 9, 9) =
+			Eigen::Map<Eigen::VectorXd>(rowMajorDiff.data(), 9);
+	}
 
-    // 3. Pose blend shapes - use templated rodrigues directly
-    std::vector<Eigen::Matrix3d> rotations(numJoints);
-    for (int i = 0; i < numJoints; ++i)
-    {
-        Eigen::Vector3d r = poseParams_.segment<3>(3 * i);
-        rotations[i] = SMPLModel::rodrigues<double>(r);
-    }
+	Eigen::MatrixXd v_posed = v_shaped;
+	if (poseBlendShapes_.cols() == pose_map.size())
+	{
+		Eigen::VectorXd pose_offset = poseBlendShapes_ * pose_map;
+		v_posed += Eigen::Map<
+			const Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor>>(
+			pose_offset.data(), N, 3);
+	}
+	else
+	{
+		std::cerr << "SMPLModel::getMesh - pose_blend_shapes dimension mismatch: "
+				  << poseBlendShapes_.rows() << "x" << poseBlendShapes_.cols()
+				  << " vs pose_map size " << pose_map.size() << std::endl;
+	}
 
-    Eigen::VectorXd pose_map((numJoints - 1) * 9);
-    for (int i = 1; i < numJoints; ++i)
-    {
-        Eigen::Matrix3d diff = rotations[i] - Eigen::Matrix3d::Identity();
+	// 4. Build LBS transforms (uses G_rot, G_trans from poseResult)
 
-        Eigen::Matrix<double, 3, 3, Eigen::RowMajor> rowMajorDiff = diff;
+	// Convert to Matrix4d for LBS (with rest pose removal)
+	std::vector<Eigen::Matrix4d> G(numJoints);
+	for (int i = 0; i < numJoints; ++i)
+	{
+		G[i].setIdentity();
+		G[i].block<3, 3>(0, 0) = poseResult.G_rot[i];
+		G[i].block<3, 1>(0, 3) = poseResult.G_trans[i];
+		// Apply rest pose removal
+		Eigen::Matrix4d rest = Eigen::Matrix4d::Identity();
+		rest.block<3, 1>(0, 3) = -J.row(i).transpose();
+		G[i] = G[i] * rest;
+	}
 
-        Eigen::Map<Eigen::VectorXd>(pose_map.data() + (i - 1) * 9, 9) =
-            Eigen::Map<Eigen::VectorXd>(rowMajorDiff.data(), 9);
-    }
+	// 5. Linear Blend Skinning
+	Eigen::MatrixXd v_final(N, 3);
 
-    Eigen::MatrixXd v_posed = v_shaped;
-    if (poseBlendShapes_.cols() == pose_map.size())
-    {
-        Eigen::VectorXd pose_offset = poseBlendShapes_ * pose_map;
-        v_posed += Eigen::Map<
-            const Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor>>(
-            pose_offset.data(), N, 3);
-    }
-    else
-    {
-        std::cerr << "SMPLModel::getMesh - pose_blend_shapes dimension mismatch: "
-                  << poseBlendShapes_.rows() << "x" << poseBlendShapes_.cols()
-                  << " vs pose_map size " << pose_map.size() << std::endl;
-    }
+	for (int i = 0; i < N; ++i)
+	{
+		Eigen::Vector4d v_homo(v_posed(i, 0), v_posed(i, 1), v_posed(i, 2), 1.0f);
+		Eigen::Vector4d v_sum = Eigen::Vector4d::Zero();
 
-    // 4. Forward kinematics (inlined)
-    Eigen::VectorXi parents = kinematicTree_.row(0);
-    std::vector<Eigen::Matrix3d> G_rot(numJoints);
-    std::vector<Eigen::Vector3d> G_trans(numJoints);
+		for (int j = 0; j < numJoints; ++j)
+		{
+			double w = weights_(i, j);
+			v_sum += w * (G[j] * v_homo);
+		}
 
-    // Root joint
-    G_rot[0] = rotations[0];
-    G_trans[0] = J.row(0).transpose();
+		v_final.row(i) = v_sum.head<3>().transpose();
+	}
 
-    // Process children
-    for (int j = 1; j < numJoints; ++j)
-    {
-        int p = parents(j);
-        Eigen::Vector3d localT = (J.row(j) - J.row(p)).transpose();
-        G_rot[j] = G_rot[p] * rotations[j];
-        G_trans[j] = G_trans[p] + G_rot[p] * localT;
-    }
+	// Output mesh
+	mesh.vertices.reserve(N);
+	for (int i = 0; i < N; ++i)
+	{
+		mesh.vertices.emplace_back(v_final(i, 0), v_final(i, 1), v_final(i, 2));
+	}
 
-    // Convert to Matrix4d for LBS (with rest pose removal)
-    std::vector<Eigen::Matrix4d> G(numJoints);
-    for (int i = 0; i < numJoints; ++i)
-    {
-        G[i].setIdentity();
-        G[i].block<3, 3>(0, 0) = G_rot[i];
-        G[i].block<3, 1>(0, 3) = G_trans[i];
-        // Apply rest pose removal
-        Eigen::Matrix4d rest = Eigen::Matrix4d::Identity();
-        rest.block<3, 1>(0, 3) = -J.row(i).transpose();
-        G[i] = G[i] * rest;
-    }
+	mesh.faces.reserve(faces_.rows());
+	for (int i = 0; i < faces_.rows(); ++i)
+	{
+		mesh.faces.emplace_back(faces_(i, 0), faces_(i, 1), faces_(i, 2));
+	}
 
-    // 5. Linear Blend Skinning
-    Eigen::MatrixXd v_final(N, 3);
-
-    for (int i = 0; i < N; ++i)
-    {
-        Eigen::Vector4d v_homo(v_posed(i, 0), v_posed(i, 1), v_posed(i, 2), 1.0f);
-        Eigen::Vector4d v_sum = Eigen::Vector4d::Zero();
-
-        for (int j = 0; j < numJoints; ++j)
-        {
-            double w = weights_(i, j);
-            v_sum += w * (G[j] * v_homo);
-        }
-
-        v_final.row(i) = v_sum.head<3>().transpose();
-    }
-
-    // Output mesh
-    mesh.vertices.reserve(N);
-    for (int i = 0; i < N; ++i)
-    {
-        mesh.vertices.emplace_back(v_final(i, 0), v_final(i, 1), v_final(i, 2));
-    }
-
-    mesh.faces.reserve(faces_.rows());
-    for (int i = 0; i < faces_.rows(); ++i)
-    {
-        mesh.faces.emplace_back(faces_(i, 0), faces_(i, 1), faces_(i, 2));
-    }
-
-    return mesh;
-}
-
-Eigen::MatrixXd SMPLModel::getJointPositions() const
-{
-    const int N = templateVertices_.rows();
-
-    // 1. shape blend shapes: v_shaped
-    Eigen::VectorXd beta = shapeParams_;
-    Eigen::Matrix<double, Eigen::Dynamic, 3> v_shaped(N, 3);
-    v_shaped = templateVertices_;
-
-    if (beta.size() > 0)
-    {
-        if (shapeBlendShapes_.cols() == beta.size())
-        {
-            Eigen::VectorXd shape_offset = shapeBlendShapes_ * beta;
-            v_shaped += Eigen::Map<
-                const Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor>>(
-                shape_offset.data(), N, 3);
-        }
-        else
-        {
-            std::cerr << "SMPLModel::getJointPositions - shape_blend_shapes dimension mismatch: "
-                      << shapeBlendShapes_.rows() << "x" << shapeBlendShapes_.cols()
-                      << " vs beta size " << beta.size() << std::endl;
-        }
-    }
-
-    // 2. regress joints directly from (shape-deformed) vertices
-    return SMPLModel::computeJoints<double>(jointRegressor_, v_shaped);
+	return mesh;
 }

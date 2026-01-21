@@ -59,3 +59,6 @@ models/*.npz
 models/*.pkl
 
 .vscode/
+
+# Ignore output folder
+output
