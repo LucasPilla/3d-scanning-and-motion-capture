@@ -62,3 +62,7 @@ models/*.pkl
 
 # Ignore output folder
 output
+
+# Ignore data folders
+data
+models

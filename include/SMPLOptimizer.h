@@ -1,4 +1,4 @@
-// FittingOptimizer
+// SMPLOptimizer
 // -----------------
 // Performs non-linear optimization (SMPLify-style) to fit SMPL parameters
 // to 2D OpenPose detections using Ceres Solver.
@@ -13,7 +13,7 @@
 #include <vector>
 
 // Interface for SMPL fitting
-class FittingOptimizer
+class SMPLOptimizer
 {
 public:
 	// Configuration flags controlling advanced features
@@ -28,7 +28,7 @@ public:
 		bool freezeShapeParameters = false;
 	};
 
-	explicit FittingOptimizer(SMPLModel *smplModel, CameraModel *cameraModel,
+	explicit SMPLOptimizer(SMPLModel *smplModel, CameraModel *cameraModel,
 							  const Options &options);
 
 	// Fit SMPL parameters to a single frame

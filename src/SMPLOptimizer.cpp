@@ -1,9 +1,9 @@
-// FittingOptimizer.cpp
+// SMPLOptimizer.cpp
 // Implements the SMPL fitting optimization pipeline.
 
-#include "FittingOptimizer.h"
-#include "CameraModel.h"
+#include "SMPLOptimizer.h"
 #include "SMPLModel.h"
+#include "CameraModel.h"
 #include <ceres/ceres.h>
 #include <ceres/rotation.h>
 #include <cmath>
@@ -137,12 +137,12 @@ struct PoseReprojectionCost
 	// Global translation vector (calculated in Step 1).
 	Eigen::Vector3d globalT_;
 
-	// Pre-computed rest joint locations (based on shape) to avoid re-calculating shape inside the loop.
-	// I added this to optimize performance
+	// Pre-computed rest joint locations (based on shape) to avoid re-calculating
+	// shape inside the loop. I added this to optimize performance
 	Eigen::Matrix<double, 24, 3> J_rest_;
 };
 
-FittingOptimizer::FittingOptimizer(SMPLModel *smplModel_,
+SMPLOptimizer::SMPLOptimizer(SMPLModel *smplModel_,
 								   CameraModel *cameraModel_,
 								   const Options &options_)
 	: smplModel(smplModel_), cameraModel(cameraModel_), options(options_)
@@ -153,13 +153,13 @@ FittingOptimizer::FittingOptimizer(SMPLModel *smplModel_,
 	shapeHistory.clear();
 }
 
-void FittingOptimizer::fitFrame(const Pose2D &observation)
+void SMPLOptimizer::fitFrame(const Pose2D &observation)
 {
 	this->fitRigid(observation);
 	this->fitPose(observation);
 }
 
-void FittingOptimizer::fitRigid(const Pose2D &observation)
+void SMPLOptimizer::fitRigid(const Pose2D &observation)
 {
 	// Get Rest Joints from current shape
 	Eigen::Map<Eigen::VectorXd> shapeVec(shapeParams.data(), shapeParams.size());
@@ -196,6 +196,9 @@ void FittingOptimizer::fitRigid(const Pose2D &observation)
 
 	if (count >= 2)
 	{
+		// Camera intrinsics
+		const auto &K = cameraModel->intrinsics();
+
 		// Estimate Depth (Z) based on torso height
 		const auto [min3D, max3D] = std::minmax_element(torso3D_y.begin(), torso3D_y.end());
 		const auto [min2D, max2D] = std::minmax_element(torso2D_y.begin(), torso2D_y.end());
@@ -205,7 +208,7 @@ void FittingOptimizer::fitRigid(const Pose2D &observation)
 
 		if (h2D > 1.0)
 		{
-			init_tz = cameraModel->intrinsics().fy * (h3D / h2D);
+			init_tz = K.fy * (h3D / h2D);
 		}
 
 		// Estimate Translation (X, Y) based on centroids
@@ -215,54 +218,75 @@ void FittingOptimizer::fitRigid(const Pose2D &observation)
 		double c2D_x = sum2D_x / count;
 		double c2D_y = sum2D_y / count;
 
-		double cx_cam = (c2D_x - cameraModel->intrinsics().cx) * init_tz / cameraModel->intrinsics().fx;
-		double cy_cam = (c2D_y - cameraModel->intrinsics().cy) * init_tz / cameraModel->intrinsics().fy;
+		double cx_cam = (c2D_x - K.cx) * init_tz / K.fx;
+		double cy_cam = (c2D_y - K.cy) * init_tz / K.fy;
 
 		init_tx = cx_cam - c3D_x;
 		init_ty = cy_cam - c3D_y;
 	}
 
 	// Optimization (Torso Only)
-	ceres::Problem problem;
-	double pose[6] = {M_PI, 0.0, 0.0, init_tx, init_ty, init_tz};
+	// Try two initial poses and keep the one with lower cost
+	// This is done to fix the initial orientation issue
+	double initPoses[2][6] = {
+		{M_PI, 0.0, 0.0, init_tx, init_ty, init_tz},
+		{M_PI, 0.0, M_PI, init_tx, init_ty, init_tz}
+	};
 
-	for (const auto &[smplIdx, opIdx] : SMPL_TO_OPENPOSE)
+	double bestPose[6];
+	double bestCost = std::numeric_limits<double>::max();
+
+	for (int poseIdx = 0; poseIdx < 2; ++poseIdx)
 	{
-		if (TORSO_SMPL_IDS.find(smplIdx) == TORSO_SMPL_IDS.end())
-			continue;
-		if (opIdx >= (int)observation.keypoints.size())
-			continue;
 
-		const Point2D &kp = observation.keypoints[opIdx];
-		if (kp.score < 0.2f)
-			continue;
+		ceres::Problem problem;
 
-		ceres::CostFunction *cost =
-			new ceres::AutoDiffCostFunction<RigidReprojectionResidual, 2, 6>(
-				new RigidReprojectionResidual(
-					smplJoints(smplIdx, 0), smplJoints(smplIdx, 1), smplJoints(smplIdx, 2),
-					kp, *cameraModel));
+		double pose[6];
+		std::copy(initPoses[poseIdx], initPoses[poseIdx] + 6, pose);
 
-		problem.AddResidualBlock(cost, new ceres::HuberLoss(1.0), pose);
+		for (const auto &[smplIdx, opIdx] : SMPL_TO_OPENPOSE)
+		{
+			if (TORSO_SMPL_IDS.find(smplIdx) == TORSO_SMPL_IDS.end())
+				continue;
+			if (opIdx >= (int)observation.keypoints.size())
+				continue;
+
+			const Point2D &kp = observation.keypoints[opIdx];
+			if (kp.score < 0.2f)
+				continue;
+
+			ceres::CostFunction *cost =
+				new ceres::AutoDiffCostFunction<RigidReprojectionResidual, 2, 6>(
+					new RigidReprojectionResidual(
+						smplJoints(smplIdx, 0), smplJoints(smplIdx, 1),
+						smplJoints(smplIdx, 2), kp, *cameraModel));
+
+			problem.AddResidualBlock(cost, new ceres::HuberLoss(1.0), pose);
+		}
+
+		ceres::Solver::Options options;
+		options.max_num_iterations = 50;
+		options.linear_solver_type = ceres::DENSE_QR;
+		options.minimizer_progress_to_stdout = false;
+
+		ceres::Solver::Summary summary;
+		ceres::Solve(options, &problem, &summary);
+
+		// Keep the pose with lower final cost
+		if (summary.final_cost < bestCost)
+		{
+			bestCost = summary.final_cost;
+			std::copy(pose, pose + 6, bestPose);
+		}
 	}
 
-	ceres::Solver::Options options;
-	options.max_num_iterations = 50;
-	options.linear_solver_type = ceres::DENSE_QR;
-	options.minimizer_progress_to_stdout = false;
-
-	ceres::Solver::Summary summary;
-	ceres::Solve(options, &problem, &summary);
-
 	// Store Optimized Rigid Transform
-	Eigen::Vector3d r_vec(pose[0], pose[1], pose[2]);
-	globalR_ = (r_vec.squaredNorm() > 1e-8)
-				   ? Eigen::AngleAxisd(r_vec.norm(), r_vec.normalized()).toRotationMatrix()
-				   : Eigen::Matrix3d::Identity();
-	globalT_ = Eigen::Vector3d(pose[3], pose[4], pose[5]);
+	Eigen::Vector3d r_vec(bestPose[0], bestPose[1], bestPose[2]);
+	globalR_ = Eigen::AngleAxisd(r_vec.norm(), r_vec.normalized()).toRotationMatrix();
+	globalT_ = Eigen::Vector3d(bestPose[3], bestPose[4], bestPose[5]);
 }
 
-void FittingOptimizer::fitPose(const Pose2D &observation)
+void SMPLOptimizer::fitPose(const Pose2D &observation)
 {
 	// Pre-compute rest-pose joints
 	Eigen::Map<Eigen::VectorXd> shapeVec(shapeParams.data(), shapeParams.size());

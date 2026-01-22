@@ -5,11 +5,11 @@
 // Steps:
 //  1) Load video frames (VideoLoader)
 //  2) Extract 2D joints using OpenPose (PoseDetector)
-//  3) Fit SMPL to each frame (FittingOptimizer)
+//  3) Fit SMPL to each frame (SMPLOptimizer)
 //  4) Visualize or export results (Visualization)
 
 #include "CameraModel.h"
-#include "FittingOptimizer.h"
+#include "SMPLOptimizer.h"
 #include "PoseDetector.h"
 #include "SMPLModel.h"
 #include "TemporalSmoother.h"
@@ -107,13 +107,13 @@ int main(int argc, char *argv[])
 	}
 
 	// Configure optimizer fitting options (flags).
-	FittingOptimizer::Options fitOpts;
+	SMPLOptimizer::Options fitOpts;
 	fitOpts.temporalRegularization = false;
 	fitOpts.warmStarting = false;
 	fitOpts.freezeShapeParameters = false;
 
 	// Initialize optimizer using SMPLModel instance
-	FittingOptimizer fitter(&smplModel, &cameraModel, fitOpts);
+	SMPLOptimizer fitter(&smplModel, &cameraModel, fitOpts);
 
 	int frameIdx = 0;
 	cv::Mat frame;
