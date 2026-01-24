@@ -32,15 +32,15 @@ public:
 
     // Pinhole projection: 3D point in camera coordinates -> 2D pixel
     // Assumes pointCam.z() > 0.
-    Eigen::Vector2f project(const Eigen::Vector3f& pointCam) const
+    Eigen::Vector2d project(const Eigen::Vector3d& pointCam) const
     {
-        float xNorm = pointCam.x() / pointCam.z();
-        float yNorm = pointCam.y() / pointCam.z();
+        double xNorm = pointCam.x() / pointCam.z();
+        double yNorm = pointCam.y() / pointCam.z();
 
-        float u = K_.fx * xNorm + K_.cx;
-        float v = K_.fy * yNorm + K_.cy;
+        double u = K_.fx * xNorm + K_.cx;
+        double v = K_.fy * yNorm + K_.cy;
 
-        return Eigen::Vector2f(u, v);
+        return Eigen::Vector2d(u, v);
     }
 
 private:

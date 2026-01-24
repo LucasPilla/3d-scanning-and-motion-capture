@@ -16,44 +16,51 @@
 #
 # =============================================================================
 
-# Script was obtained from https://github.com/chongyi-zheng/SMPLpp
-# We did some modifications to work with Python 3.
+# Script was obtained from https://github.com/chongyi-zheng/SMPLpp with some modifications
 
 import sys
 import os
 import numpy as np
 import pickle as pkl
 import json
+import argparse
 
-def main(args):
-    gender = args[1]
-    raw_model_path = args[2]
-    save_dir = args[3]
+def main():
+    parser = argparse.ArgumentParser(description='Preprocess SMPL models into JSON.')
+    
+    # Required arguments
+    parser.add_argument('--model_path', type=str, required=True, 
+                        help='Path to the raw SMPL model pickle file')
+    parser.add_argument('--save_dir', type=str, required=True,
+                        help='Directory to save the processed output')
+    parser.add_argument('--output_name', type=str, required=True,
+                        help='Name of the output JSON file (e.g., smpl_model.json)')
+    
+    # Optional arguments
+    parser.add_argument('--gmm_path', type=str, default=None,
+                        help='Path to the GMM prior pickle file (Optional)')
+    parser.add_argument('--capsule_regressor_path', type=str, default=None,
+                        help='Path to the capsule regressors .npz file (Optional)')
 
-    output_names = {
-        'female': ('smpl_female.npz', 'smpl_female.json'),
-        'male': ('smpl_male.npz', 'smpl_male.json')
-    }
+    args = parser.parse_args()
 
-    if gender not in output_names:
-        raise SystemError("Gender must be 'male' or 'female'")
+    if not os.path.exists(args.save_dir):
+        os.makedirs(args.save_dir)
 
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-
-    # Load with latin1 and convert chumpy objects to numpy
-    with open(raw_model_path, 'rb') as f:
-        data = pkl.load(f, encoding='latin1')
-
-    # Helper to strip chumpy/scipy wrappers
+    # Helper to strip chumpy/scipy wrappers and convert to numpy
     def to_array(x):
         if hasattr(x, 'toarray'): # for scipy sparse matrices
             return np.array(x.toarray())
         return np.array(x)
 
+    # Load SMPL Model
+    print(f"Loading SMPL model from: {args.model_path}")
+    with open(args.model_path, 'rb') as f:
+        data = pkl.load(f, encoding='latin1')
+
     model_data = {
         'vertices_template': to_array(data['v_template']),
-        'face_indices': to_array(data['f']).astype(np.int32) + 1,
+        'face_indices': to_array(data['f']).astype(np.int32) + 1, # +1 for 1-based indexing
         'weights': to_array(data['weights']),
         'shape_blend_shapes': to_array(data['shapedirs']),
         'pose_blend_shapes': to_array(data['posedirs']),
@@ -61,21 +68,45 @@ def main(args):
         'kinematic_tree': to_array(data['kintree_table']).astype(np.int32)
     }
 
-    # Save NPZ
-    npz_path = os.path.join(save_dir, output_names[gender][0])
-    np.savez(npz_path, **model_data)
+    # Load GMM Prior (Optional)
+    if args.gmm_path:
+        print(f"Loading GMM Prior from: {args.gmm_path}")
+        with open(args.gmm_path, 'rb') as f:
+            gmm_data = pkl.load(f, encoding='latin1')
+        
+        if 'means' in gmm_data:
+            model_data['gmm_means'] = to_array(gmm_data['means'])
+            model_data['gmm_covars'] = to_array(gmm_data['covars'])
+            model_data['gmm_weights'] = to_array(gmm_data['weights'])
+        else:
+            print("Warning: GMM file did not contain expected keys (means, covars, weights)")
+    else:
+        print("No GMM path provided. Skipping GMM data.")
 
-    # Save JSON (Convert to list for serialization)
-    json_path = os.path.join(save_dir, output_names[gender][1])
-    model_json = {k: v.tolist() for k, v in model_data.items()}
+    # Load Capsule Regressors (Optional)
+    if args.capsule_regressor_path:
+        print(f"Loading Capsule Regressors from: {args.capsule_regressor_path}")
+        reg_data = np.load(args.capsule_regressor_path)
+        for key in reg_data.files:
+            model_data[f'capsule_{key}'] = to_array(reg_data[key])
+    else:
+        print("No Capsule Regressor path provided. Skipping capsule data.")
+
+    # Save JSON
+    json_path = os.path.join(args.save_dir, args.output_name)
+    print(f"Saving JSON to: {json_path}")
     
-    with open(json_path, 'w') as f: # Use 'w' instead of 'wb+'
+    model_json = {}
+    for k, v in model_data.items():
+        if isinstance(v, np.ndarray):
+            model_json[k] = v.tolist()
+        else:
+            model_json[k] = v
+
+    with open(json_path, 'w') as f: 
         json.dump(model_json, f, indent=4)
 
-    print(f'Successfully processed model to: {os.path.abspath(save_dir)}')
+    print(f'Successfully processed.')
 
 if __name__ == '__main__':
-    if len(sys.argv) != 4:
-        print('USAGE: python3 preprocess.py <gender> <path-to-pkl> <save-dir>')
-        sys.exit(1)
-    main(sys.argv)
+    main()

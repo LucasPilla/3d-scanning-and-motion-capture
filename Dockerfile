@@ -1,81 +1,96 @@
-# Use an official Ubuntu base image
 FROM ubuntu:22.04
 
-# Set environment variable to avoid user prompts while building docker image
 ENV DEBIAN_FRONTEND=noninteractive
+ENV CMAKE_BUILD_PARALLEL_LEVEL=8
 
-# Install basic dependencies
+##############################
+######    Dependencies   #####
+##############################
+
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
     git \
+    pkg-config \
     protobuf-compiler \
     libboost-all-dev \
     libhdf5-dev \
     libgoogle-glog-dev \
     libgflags-dev \
     libatlas-base-dev \
-    libsuitesparse-dev
+    liblapack-dev \
+    libsuitesparse-dev \
+    libeigen3-dev \
+    libomp-dev \
+    python3 \
+    python3-pip \
+    libopencv-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 ##############################
-####### Install Eigen ########
+##### Build Ceres 2.2.0 ######
 ##############################
 
-RUN apt install -y libeigen3-dev
+WORKDIR /opt
+
+RUN git clone https://ceres-solver.googlesource.com/ceres-solver \
+ && cd ceres-solver \
+ && git checkout 2.2.0 \
+ && mkdir build
+
+WORKDIR /opt/ceres-solver/build
+
+ENV CXXFLAGS="-O3 -march=native"
+ENV CFLAGS="-O3 -march=native"
+
+RUN cmake .. \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_TESTING=OFF \
+    -DBUILD_EXAMPLES=OFF \
+    -DCERES_THREADING_MODEL=OPENMP \
+    -DCERES_USE_OPENMP=ON \
+    -DLAPACK=ON \
+    -DBLAS=ON
+ 
+RUN make -j2 && make install
 
 ##############################
-###### Install Ceres ######
+###### Build OpenPose ########
 ##############################
 
-RUN apt-get install -y libceres-dev
-
-##############################
-####### Install OpenCV #######
-##############################
-
-RUN apt-get install -y libopencv-dev
-
-##############################
-###### Install OpenPose ######
-##############################
-
-# Clone repository from github
 WORKDIR /opt
 RUN git clone https://github.com/CMU-Perceptual-Computing-Lab/openpose
 
-# Fetch submodules
 WORKDIR /opt/openpose
-RUN git submodule update --init --recursive --remote
+RUN git submodule update --init --recursive
 
-# Create build directory
 WORKDIR /opt/openpose/build
 
-# Configure CMake
-# NOTE: We use GPU_MODE=CPU_ONLY to ensure the Docker build succeeds on machines 
-# without NVIDIA drivers mapped. If you have CUDA, change this to CUDA.
 RUN cmake .. \
     -DGPU_MODE=CPU_ONLY \
     -DBUILD_PYTHON=OFF \
     -DDOWNLOAD_BODY_25_MODEL=ON \
     -DDOWNLOAD_FACE_MODEL=OFF \
-    -DDOWNLOAD_HAND_MODEL=OFF
+    -DDOWNLOAD_HAND_MODEL=OFF \
+    -DCMAKE_BUILD_TYPE=Release
 
-# Build
-RUN make -j$(nproc) && make install
+RUN make -j2 && make install
 
-# Add /usr/local/lib to PATH as some libraries are installed there.
+##############################
+###### Runtime Settings ######
+##############################
+
 ENV LD_LIBRARY_PATH="/usr/local/lib"
+ENV OMP_NUM_THREADS=8
+ENV OMP_PROC_BIND=spread
+ENV OMP_PLACES=cores
 
-# Install python and dependencies for scripts
-RUN apt-get install -y \
-    python3 \
-    python3-pip 
-    
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+##############################
+###### Python Deps ##########
+##############################
 
-# Initial directory
+COPY requirements.txt /tmp/requirements.txt
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
+
 WORKDIR /usr/src/project
-
-# Default command
 CMD ["bash"]

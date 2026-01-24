@@ -27,10 +27,10 @@ add_executable(pipeline
     src/main.cpp
     src/VideoLoader.cpp
     src/PoseDetector.cpp
-    src/Visualization.cpp
-    src/FittingOptimizer.cpp
-    src/TemporalSmoother.cpp
     src/SMPLModel.cpp
+    src/SMPLOptimizer.cpp
+    src/TemporalSmoother.cpp
+    src/Visualization.cpp
 )
 
 target_include_directories(pipeline PRIVATE
