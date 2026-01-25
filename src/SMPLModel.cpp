@@ -339,7 +339,7 @@ void SMPLModel::setShape(const std::vector<double> &shapeParams)
 	}
 }
 
-SMPLMesh SMPLModel::computeMesh() const
+SMPLMesh SMPLModel::computeMesh()
 {
 	SMPLMesh mesh;
 
@@ -347,7 +347,7 @@ SMPLMesh SMPLModel::computeMesh() const
 	const int numJoints = jointRegressor_.rows();
 
 	// 1. Apply shape: get v_shaped and J_rest
-	Eigen::Matrix<double, 10, 1> beta;
+	Eigen::Matrix<double, Eigen::Dynamic, 1> beta(10);
 	for (int i = 0; i < 10; ++i)
 	{
 		beta(i) = shapeParams_(i);
@@ -363,6 +363,9 @@ SMPLMesh SMPLModel::computeMesh() const
 		theta(i) = poseParams_(i);
 	}
 	auto poseResult = applyPose<double>(theta, J);
+
+	// Store posed joints for logging
+	lastJoints3D_ = poseResult.posedJoints;
 
 	// 3. Pose blend shapes (uses rotations from poseResult)
 	Eigen::VectorXd pose_map((numJoints - 1) * 9);
