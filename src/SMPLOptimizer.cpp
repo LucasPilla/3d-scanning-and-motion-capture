@@ -95,8 +95,11 @@ struct PoseReprojectionCost
 		// Map raw pointer to Eigen vector
 		Eigen::Map<const Eigen::Matrix<T, 72, 1>> poseParams(poseParamsPtr);
 
+		// Cast rest joints to type T for AutoDiff
+		Eigen::Matrix<T, 24, 3> J_rest_T = J_rest_.template cast<T>();
+
 		// Apply SMPL Forward Kinematics
-		auto poseResult = model_.applyPose<T>(poseParams, J_rest_);
+		auto poseResult = model_.applyPose<T>(poseParams, J_rest_T);
 
 		// Get specific joint position
 		Eigen::Matrix<T, 3, 1> jointPos = poseResult.posedJoints.row(smplJointIdx_).transpose();
@@ -151,12 +154,53 @@ SMPLOptimizer::SMPLOptimizer(SMPLModel *smplModel_,
 	shapeParams.assign(10, 0.0);
 	poseHistory.clear();
 	shapeHistory.clear();
+	hasPreviousFrame_ = false;
 }
 
 void SMPLOptimizer::fitFrame(const Pose2D &observation)
 {
-	this->fitRigid(observation);
-	this->fitPose(observation);
+	// Reset diagnostics for this frame
+    lastFitRigidCost_  = -1.0;
+    lastFitRigidIters_ = 0;
+    lastFitPoseCost_   = -1.0;
+    lastFitPoseIters_  = 0;
+
+	// Warm-starting mode
+	if (!options.warmStarting)
+    {
+        // Cold start: reset SMPL parameters and global transform every frame
+        std::fill(poseParams.begin(), poseParams.end(), 0.0);
+        std::fill(shapeParams.begin(), shapeParams.end(), 0.0);
+
+        // Keep SMPLModel internal state consistent with our vectors
+        smplModel->setPose(poseParams);
+        smplModel->setShape(shapeParams);
+
+        globalR_ = Eigen::Matrix3d::Identity();
+        globalT_ = Eigen::Vector3d::Zero();
+
+        fitRigid(observation);
+        fitPose(observation);
+
+        // In cold-start mode we conceptually don't use previous-frame state
+        hasPreviousFrame_ = false;
+        return;
+    }
+
+    // Warm-starting mode
+    if (!hasPreviousFrame_)
+    {
+        // First frame: run full optimization to initialize pose + global transform
+        fitRigid(observation);
+        fitPose(observation);
+        hasPreviousFrame_ = true;
+    }
+    else
+    {
+        // Subsequent frames: reuse previous poseParams and globalR_/globalT_
+        // fitPose() already initializes from current poseParams.
+        fitPose(observation);
+    }
 }
 
 void SMPLOptimizer::fitRigid(const Pose2D &observation)
@@ -235,6 +279,7 @@ void SMPLOptimizer::fitRigid(const Pose2D &observation)
 
 	double bestPose[6];
 	double bestCost = std::numeric_limits<double>::max();
+	int    bestIters = 0;
 
 	for (int poseIdx = 0; poseIdx < 2; ++poseIdx)
 	{
@@ -276,6 +321,7 @@ void SMPLOptimizer::fitRigid(const Pose2D &observation)
 		if (summary.final_cost < bestCost)
 		{
 			bestCost = summary.final_cost;
+			bestIters = summary.num_successful_steps;
 			std::copy(pose, pose + 6, bestPose);
 		}
 	}
@@ -284,6 +330,10 @@ void SMPLOptimizer::fitRigid(const Pose2D &observation)
 	Eigen::Vector3d r_vec(bestPose[0], bestPose[1], bestPose[2]);
 	globalR_ = Eigen::AngleAxisd(r_vec.norm(), r_vec.normalized()).toRotationMatrix();
 	globalT_ = Eigen::Vector3d(bestPose[3], bestPose[4], bestPose[5]);
+
+	// Store diagnostics
+	lastFitRigidCost_  = bestCost;
+	lastFitRigidIters_ = bestIters;
 }
 
 void SMPLOptimizer::fitPose(const Pose2D &observation)
@@ -326,4 +376,8 @@ void SMPLOptimizer::fitPose(const Pose2D &observation)
 	// Update SMPL Model State
 	poseParams = poseOptim;
 	smplModel->setPose(poseParams);
+
+	// Store diagnostics
+	lastFitPoseCost_  = summary.final_cost;
+	lastFitPoseIters_ = summary.num_successful_steps;
 }

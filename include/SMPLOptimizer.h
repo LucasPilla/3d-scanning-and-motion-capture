@@ -45,6 +45,16 @@ public:
 	const Eigen::Matrix3d &getGlobalR() const { return globalR_; }
 	const Eigen::Vector3d &getGlobalT() const { return globalT_; }
 
+	// Expose current SMPL pose and shape parameters
+	const std::vector<double> &getPoseParams() const { return poseParams; }
+	const std::vector<double> &getShapeParams() const { return shapeParams; }
+
+	// Expose last optimization diagnostics
+	double getLastFitRigidCost() const { return lastFitRigidCost_; }
+	int    getLastFitRigidIters() const { return lastFitRigidIters_; }
+	double getLastFitPoseCost() const { return lastFitPoseCost_; }
+	int    getLastFitPoseIters() const { return lastFitPoseIters_; }
+
 private:
 	// Global rigid transform computed in Step 1 (fitRigid)
 	Eigen::Matrix3d globalR_ = Eigen::Matrix3d::Identity();
@@ -72,4 +82,13 @@ private:
 	TemporalSmoother smoother;
 	TemporalSmoother::ParamSequence poseHistory;
 	TemporalSmoother::ParamSequence shapeHistory;
+
+	// Tracks whether we already have a solution from a previous frame
+    bool hasPreviousFrame_ = false;
+
+	// Ceres costs and iterations
+	double lastFitRigidCost_ = -1.0;
+	int    lastFitRigidIters_ = 0;
+	double lastFitPoseCost_ = -1.0;
+	int    lastFitPoseIters_ = 0;
 };
