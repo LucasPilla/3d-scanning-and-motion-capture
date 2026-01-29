@@ -9,244 +9,231 @@
 #include <vector>
 
 // A simple mesh container for SMPL output.
-struct SMPLMesh
-{
-	// (numVertices, 3)
-	std::vector<Eigen::Vector3f> vertices;
+struct SMPLMesh {
+  // (numVertices, 3)
+  std::vector<Eigen::Vector3f> vertices;
 
-	// (numFaces, 3)
-	std::vector<Eigen::Vector3i> faces;
+  // (numFaces, 3)
+  std::vector<Eigen::Vector3i> faces;
 
-	// Saves the mesh to OBJ format
-	bool save(const std::string &path) const;
+  // Saves the mesh to OBJ format
+  bool save(const std::string &path) const;
 };
 
-class SMPLModel
-{
+class SMPLModel {
 private:
-	using MatrixXd = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>;
-	using MatrixXi = Eigen::Matrix<int, Eigen::Dynamic, Eigen::Dynamic>;
+  using MatrixXd = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>;
+  using MatrixXi = Eigen::Matrix<int, Eigen::Dynamic, Eigen::Dynamic>;
 
-	// --------- Model data ---------
+  // --------- Model data ---------
 
-	// (numVertices, 3)
-	MatrixXd templateVertices_;
+  // (numVertices, 3)
+  MatrixXd templateVertices_;
 
-	// (numFaces, 3) triangle indices
-	MatrixXi faces_;
+  // (numFaces, 3) triangle indices
+  MatrixXi faces_;
 
-	// Shape blendshapes, flattened as (numVertices * 3, numShapeCoeffs)
-	MatrixXd shapeBlendShapes_;
+  // Shape blendshapes, flattened as (numVertices * 3, numShapeCoeffs)
+  MatrixXd shapeBlendShapes_;
 
-	// Pose blendshapes, flattened as (numVertices * 3, numPoseCoeffs)
-	MatrixXd poseBlendShapes_;
+  // Pose blendshapes, flattened as (numVertices * 3, numPoseCoeffs)
+  MatrixXd poseBlendShapes_;
 
-	// Joint regressor: (numJoints, numVertices)
-	MatrixXd jointRegressor_;
+  // Joint regressor: (numJoints, numVertices)
+  MatrixXd jointRegressor_;
+  
+  // OpenPose Joint regressor: (25, numVertices)
+  MatrixXd openPoseJointRegressor_;
 
-	// Weights: (numVertices, numJoints)
-	MatrixXd weights_;
+  // Weights: (numVertices, numJoints)
+  MatrixXd weights_;
 
-	// Kinematic Tree: (2, numJoints)
-	MatrixXi kinematicTree_;
+  // Kinematic Tree: (2, numJoints)
+  MatrixXi kinematicTree_;
 
-	// GMM Prior Data
-	MatrixXd gmmMeans_;
-	MatrixXd gmmCovars_;
-	MatrixXd gmmWeights_;
+  // GMM Prior Data
+  MatrixXd gmmMeans_;
+  std::vector<Eigen::MatrixXd> gmmPrecChols_;
+  MatrixXd gmmWeights_;
 
-	// Capsule Regressors
-	MatrixXd capsuleV2Lens_;	 // Base lengths
-	MatrixXd capsuleBetas2Lens_; // Linear weights (shape -> lengths)
-	MatrixXd capsuleV2Rads_;	 // Base radius
-	MatrixXd capsuleBetas2Rads_; // Linear weights (shape -> radius)
+  // Capsule Regressors
+  MatrixXd capsuleV2Lens_;     // Base lengths
+  MatrixXd capsuleBetas2Lens_; // Linear weights (shape -> lengths)
+  MatrixXd capsuleV2Rads_;     // Base radius
+  MatrixXd capsuleBetas2Rads_; // Linear weights (shape -> radius)
 
-	// --------- Parameters ---------
+  // --------- Parameters ---------
 
-	// Pose parameters (72 axis-angle parameters)
-	Eigen::VectorXd poseParams_ = Eigen::VectorXd::Zero(72);
+  // Pose parameters (72 axis-angle parameters)
+  Eigen::VectorXd poseParams_ = Eigen::VectorXd::Zero(72);
 
-	// Shape parameters (10 betas)
-	Eigen::VectorXd shapeParams_ = Eigen::VectorXd::Zero(10);
+  // Shape parameters (10 betas)
+  Eigen::VectorXd shapeParams_ = Eigen::VectorXd::Zero(10);
 
-	Eigen::Matrix<double, 24, 3> lastJoints3D_;
+  Eigen::Matrix<double, 24, 3> lastJoints3D_;
 
 public:
-	SMPLModel() = default;
+  SMPLModel() = default;
 
-	// Getters
-	const Eigen::MatrixXd &getTemplateVertices() const { return templateVertices_; }
-	const Eigen::MatrixXd &getShapeBlendShapes() const { return shapeBlendShapes_; }
-	const Eigen::MatrixXd &getPoseBlendShapes() const { return poseBlendShapes_; }
-	const Eigen::MatrixXd &getJointRegressor() const { return jointRegressor_; }
-	const Eigen::MatrixXd &getWeights() const { return weights_; }
-	const Eigen::MatrixXi &getKinematicTree() const { return kinematicTree_; }
-	const Eigen::MatrixXi &getFaces() const { return faces_; }
+  // Getters
+  const Eigen::MatrixXd &getTemplateVertices() const { return templateVertices_; }
+  const Eigen::MatrixXd &getShapeBlendShapes() const { return shapeBlendShapes_; }
+  const Eigen::MatrixXd &getPoseBlendShapes() const { return poseBlendShapes_; }
+  const Eigen::MatrixXd &getJointRegressor() const { return jointRegressor_; }
+  const Eigen::MatrixXd &getOpenPoseJointRegressor() const { return openPoseJointRegressor_; }
+  const Eigen::MatrixXd &getWeights() const { return weights_; }
+  const Eigen::MatrixXi &getKinematicTree() const { return kinematicTree_; }
+  const Eigen::MatrixXi &getFaces() const { return faces_; }
+  const Eigen::MatrixXd &getGmmMeans() const { return gmmMeans_; }
+  const std::vector<Eigen::MatrixXd> &getGmmPrecChols() const { return gmmPrecChols_; }
+  const Eigen::MatrixXd &getGmmWeights() const { return gmmWeights_; }
+  const Eigen::MatrixXd &getCapsuleV2Lens() const { return capsuleV2Lens_; }
+  const Eigen::MatrixXd &getCapsuleBetas2Lens() const {return capsuleBetas2Lens_;}
+  const Eigen::MatrixXd &getCapsuleV2Rads() const { return capsuleV2Rads_; }
+  const Eigen::MatrixXd &getCapsuleBetas2Rads() const {return capsuleBetas2Rads_;}
+  const Eigen::Matrix<double, 24, 3> &getLastJoints3D() const {return lastJoints3D_;}
 
-	const Eigen::MatrixXd &getGmmMeans() const { return gmmMeans_; }
-	const Eigen::MatrixXd &getGmmCovars() const { return gmmCovars_; }
-	const Eigen::MatrixXd &getGmmWeights() const { return gmmWeights_; }
+  // Load SMPL model parameters from JSON file generated by preprocess.py.
+  //
+  // Expected keys in the JSON (see preprocess.py):
+  //   - "vertices_template"        : (6890, 3)
+  //   - "face_indices"             : (F, 3)
+  //   - "shape_blend_shapes"       : (6890, 3, 10)
+  //   - "pose_blend_shapes"        : (6890, 3, 207)
+  //   - "joint_regressor"          : (24, 6890)
+  //   - "openpose_joint_regressor" : (25, 6890)
+  //   - "weights"                  : (6890, 24)
+  //   - "kinematic_tree"           : (2, 24)
+  //   - "gmm_means" 			          : (8, 69)
+  //   - "gmm_covars" 		          : (8, 69, 69)
+  //   - "gmm_weights" 		          : (8)
+  //   - "capsule_v2lens" 	  (not used)
+  //   - "capsule_betas2lens" (not used)
+  //   - "capsule_v2rads" 	  (not used)
+  //   - "capsule_betas2rads" (not used)
+  bool loadFromJson(const std::string &jsonPath);
 
-	const Eigen::MatrixXd &getCapsuleV2Lens() const { return capsuleV2Lens_; }
-	const Eigen::MatrixXd &getCapsuleBetas2Lens() const { return capsuleBetas2Lens_; }
-	const Eigen::MatrixXd &getCapsuleV2Rads() const { return capsuleV2Rads_; }
-	const Eigen::MatrixXd &getCapsuleBetas2Rads() const { return capsuleBetas2Rads_; }
+  // Set SMPL pose parameters (e.g. 72 axis-angle parameters).
+  void setPose(const std::vector<double> &poseParams);
 
-	const Eigen::Matrix<double, 24, 3> &getLastJoints3D() const { return lastJoints3D_; }
+  // Set SMPL shape parameters (e.g. 10 betas).
+  void setShape(const std::vector<double> &shapeParams);
 
-	// Load SMPL model parameters from JSON file generated by preprocess.py.
-	//
-	// Expected keys in the JSON (see preprocess.py):
-	//   - "vertices_template"  : (6890, 3)
-	//   - "face_indices"       : (F, 3)
-	//   - "shape_blend_shapes" : (6890, 3, 10)
-	//   - "pose_blend_shapes"  : (6890, 3, 207)
-	//   - "joint_regressor"    : (24, 6890)
-	//   - "weights"            : (6890, 24)
-	//   - "kinematic_tree"     : (2, 24)
-	//   - "gmm_means" 			(optional)
-	//   - "gmm_covars" 		(optional)
-	//   - "gmm_weights" 		(optional)
-	//   - "capsule_v2lens" 	(optional)
-	//   - "capsule_betas2lens" (optional)
-	//   - "capsule_v2rads" 	(optional)
-	//   - "capsule_betas2rads" (optional)
-	bool loadFromJson(const std::string &jsonPath);
+  // Get mesh based on pose and shape parameters.
+  SMPLMesh computeMesh();
 
-	// Set SMPL pose parameters (e.g. 72 axis-angle parameters).
-	void setPose(const std::vector<double> &poseParams);
+  // rodrigues: Axis-angle vector → rotation matrix
+  template <typename T>
+  static Eigen::Matrix<T, 3, 3> rodrigues(const Eigen::Matrix<T, 3, 1> &r) {
+    using std::cos;
+    using std::sin;
+    using std::sqrt;
 
-	// Set SMPL shape parameters (e.g. 10 betas).
-	void setShape(const std::vector<double> &shapeParams);
+    T theta = sqrt(r.squaredNorm() + T(1e-12));
+    T c = cos(theta);
+    T s = sin(theta);
+    T t = T(1.0) - c;
 
-	// Get mesh based on pose and shape parameters.
-	SMPLMesh computeMesh();
+    Eigen::Matrix<T, 3, 1> k = r / theta;
 
-	// rodrigues: Axis-angle vector → rotation matrix
-	template <typename T>
-	static Eigen::Matrix<T, 3, 3> rodrigues(const Eigen::Matrix<T, 3, 1> &r)
-	{
-		using std::cos;
-		using std::sin;
-		using std::sqrt;
+    Eigen::Matrix<T, 3, 3> K;
+    K << T(0), -k(2), k(1), k(2), T(0), -k(0), -k(1), k(0), T(0);
 
-		T theta = sqrt(r.squaredNorm() + T(1e-12));
-		T c = cos(theta);
-		T s = sin(theta);
-		T t = T(1.0) - c;
+    return Eigen::Matrix<T, 3, 3>::Identity() * c + t * k * k.transpose() +
+           s * K;
+  }
 
-		Eigen::Matrix<T, 3, 1> k = r / theta;
+  // Result struct for applyShape
+  template <typename T> struct ShapeResult {
+    Eigen::Matrix<T, Eigen::Dynamic, 3> shapedVertices; // v_shaped (N×3)
+    Eigen::Matrix<T, 24, 3> restJoints;                 // J_rest (24×3)
+  };
 
-		Eigen::Matrix<T, 3, 3> K;
-		K << T(0), -k(2), k(1), k(2), T(0), -k(0), -k(1), k(0), T(0);
+  // Apply shape parameters to base mesh.
+  // Combines shape blendshapes and joint regression.
+  template <typename T>
+  ShapeResult<T>
+  applyShape(const Eigen::Matrix<T, Eigen::Dynamic, 1> &shapeParams) const {
+    int numVertices = static_cast<int>(templateVertices_.rows());
+    int numShapeCoeffs = static_cast<int>(shapeBlendShapes_.cols());
+    int usedCoeffs =
+        std::min(numShapeCoeffs, static_cast<int>(shapeParams.rows()));
 
-		return Eigen::Matrix<T, 3, 3>::Identity() * c + t * k * k.transpose() + s * K;
-	}
+    ShapeResult<T> result;
+    result.shapedVertices.resize(numVertices, 3);
 
-	// Result struct for applyShape
-	template <typename T>
-	struct ShapeResult
-	{
-		Eigen::Matrix<T, Eigen::Dynamic, 3> shapedVertices; // v_shaped (N×3)
-		Eigen::Matrix<T, 24, 3> restJoints;					// J_rest (24×3)
-	};
+    // 1. Apply shape blendshapes: v_shaped = template + B_S * β
+    for (int i = 0; i < numVertices; ++i) {
+      for (int c = 0; c < 3; ++c) {
+        result.shapedVertices(i, c) = T(templateVertices_(i, c));
+        int row = i * 3 + c;
+        for (int k = 0; k < usedCoeffs; ++k) {
+          result.shapedVertices(i, c) +=
+              T(shapeBlendShapes_(row, k)) * shapeParams(k);
+        }
+      }
+    }
 
-	// Apply shape parameters to base mesh.
-	// Combines shape blendshapes and joint regression.
-	template <typename T>
-	ShapeResult<T> applyShape(const Eigen::Matrix<T, Eigen::Dynamic, 1> &shapeParams) const
-	{
-		int numVertices = static_cast<int>(templateVertices_.rows());
-		int numShapeCoeffs = static_cast<int>(shapeBlendShapes_.cols());
-		int usedCoeffs = std::min(numShapeCoeffs, static_cast<int>(shapeParams.rows()));
+    // 2. Joint regression: J = regressor * v_shaped
+    constexpr int numJoints = 24;
+    for (int j = 0; j < numJoints; ++j) {
+      for (int c = 0; c < 3; ++c) {
+        result.restJoints(j, c) = T(0);
+        for (int v = 0; v < numVertices; ++v) {
+          result.restJoints(j, c) +=
+              T(jointRegressor_(j, v)) * result.shapedVertices(v, c);
+        }
+      }
+    }
 
-		ShapeResult<T> result;
-		result.shapedVertices.resize(numVertices, 3);
+    return result;
+  }
 
-		// 1. Apply shape blendshapes: v_shaped = template + B_S * β
-		for (int i = 0; i < numVertices; ++i)
-		{
-			for (int c = 0; c < 3; ++c)
-			{
-				result.shapedVertices(i, c) = T(templateVertices_(i, c));
-				int row = i * 3 + c;
-				for (int k = 0; k < usedCoeffs; ++k)
-				{
-					result.shapedVertices(i, c) +=
-						T(shapeBlendShapes_(row, k)) * shapeParams(k);
-				}
-			}
-		}
+  // Result struct for applyPose
+  template <typename T> struct PoseResult {
+    Eigen::Matrix<T, 3, 3> rotations[24]; // Per-joint rotation matrices
+    Eigen::Matrix<T, 3, 3> G_rot[24];     // Global rotation transforms
+    Eigen::Matrix<T, 3, 1> G_trans[24];   // Global translation transforms
+    Eigen::Matrix<T, 24, 3> posedJoints;  // J_posed (24×3)
+  };
 
-		// 2. Joint regression: J = regressor * v_shaped
-		constexpr int numJoints = 24;
-		for (int j = 0; j < numJoints; ++j)
-		{
-			for (int c = 0; c < 3; ++c)
-			{
-				result.restJoints(j, c) = T(0);
-				for (int v = 0; v < numVertices; ++v)
-				{
-					result.restJoints(j, c) +=
-						T(jointRegressor_(j, v)) * result.shapedVertices(v, c);
-				}
-			}
-		}
+  // Apply pose parameters to base mesh with shape.
+  template <typename T>
+  PoseResult<T> applyPose(const Eigen::Matrix<T, 72, 1> &poseParams,
+                          const Eigen::Matrix<T, 24, 3> &J_rest) const {
+    constexpr int numJoints = 24;
+    PoseResult<T> result;
 
-		return result;
-	}
+    // Get parents from kinematic tree
+    Eigen::VectorXi parents = kinematicTree_.row(0);
 
-	// Result struct for applyPose
-	template <typename T>
-	struct PoseResult
-	{
-		Eigen::Matrix<T, 3, 3> rotations[24]; // Per-joint rotation matrices
-		Eigen::Matrix<T, 3, 3> G_rot[24];	  // Global rotation transforms
-		Eigen::Matrix<T, 3, 1> G_trans[24];	  // Global translation transforms
-		Eigen::Matrix<T, 24, 3> posedJoints;  // J_posed (24×3)
-	};
+    // Build rotation matrices from axis-angle parameters
+    for (int j = 0; j < numJoints; ++j) {
+      Eigen::Matrix<T, 3, 1> r;
+      r << poseParams(j * 3), poseParams(j * 3 + 1), poseParams(j * 3 + 2);
+      result.rotations[j] = rodrigues<T>(r);
+    }
 
-	// Apply pose parameters to base mesh with shape.
-	template <typename T>
-	PoseResult<T> applyPose(const Eigen::Matrix<T, 72, 1> &poseParams,
-							const Eigen::Matrix<T, 24, 3> &J_rest) const
-	{
-		constexpr int numJoints = 24;
-		PoseResult<T> result;
+    // Forward kinematics through kinematic tree
+    // Root joint
+    result.G_rot[0] = result.rotations[0];
+    result.G_trans[0] << T(J_rest(0, 0)), T(J_rest(0, 1)), T(J_rest(0, 2));
 
-		// Get parents from kinematic tree
-		Eigen::VectorXi parents = kinematicTree_.row(0);
+    // Process children
+    for (int j = 1; j < numJoints; ++j) {
+      int p = parents(j);
+      Eigen::Matrix<T, 3, 1> localT;
+      localT << T(J_rest(j, 0) - J_rest(p, 0)), T(J_rest(j, 1) - J_rest(p, 1)),
+          T(J_rest(j, 2) - J_rest(p, 2));
+      result.G_rot[j] = result.G_rot[p] * result.rotations[j];
+      result.G_trans[j] = result.G_trans[p] + result.G_rot[p] * localT;
+    }
 
-		// Build rotation matrices from axis-angle parameters
-		for (int j = 0; j < numJoints; ++j)
-		{
-			Eigen::Matrix<T, 3, 1> r;
-			r << poseParams(j * 3), poseParams(j * 3 + 1), poseParams(j * 3 + 2);
-			result.rotations[j] = rodrigues<T>(r);
-		}
+    // Extract posed joint positions
+    for (int j = 0; j < numJoints; ++j) {
+      result.posedJoints.row(j) = result.G_trans[j].transpose();
+    }
 
-		// Forward kinematics through kinematic tree
-		// Root joint
-		result.G_rot[0] = result.rotations[0];
-		result.G_trans[0] << T(J_rest(0, 0)), T(J_rest(0, 1)), T(J_rest(0, 2));
-
-		// Process children
-		for (int j = 1; j < numJoints; ++j)
-		{
-			int p = parents(j);
-			Eigen::Matrix<T, 3, 1> localT;
-			localT << T(J_rest(j, 0) - J_rest(p, 0)), T(J_rest(j, 1) - J_rest(p, 1)),
-				T(J_rest(j, 2) - J_rest(p, 2));
-			result.G_rot[j] = result.G_rot[p] * result.rotations[j];
-			result.G_trans[j] = result.G_trans[p] + result.G_rot[p] * localT;
-		}
-
-		// Extract posed joint positions
-		for (int j = 0; j < numJoints; ++j)
-		{
-			result.posedJoints.row(j) = result.G_trans[j].transpose();
-		}
-
-		return result;
-	}
+    return result;
+  }
 };

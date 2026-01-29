@@ -21,7 +21,7 @@ public:
 
 	// Draw SMPL mesh wireframe overlay on frame
 	void drawMesh(cv::Mat &frame, const SMPLMesh &mesh, const CameraModel &camera,
-				  const Eigen::Matrix3d &globalR, const Eigen::Vector3d &globalT,
+				  const Eigen::Vector3d &globalT,
 				  const cv::Scalar &color = cv::Scalar(0, 255, 255),
 				  int lineThickness = 1);
 

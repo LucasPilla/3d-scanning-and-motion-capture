@@ -30,15 +30,17 @@ def main():
     
     # Required arguments
     parser.add_argument('--model_path', type=str, required=True, 
-                        help='Path to the raw SMPL model pickle file')
+                        help='Path to the raw SMPL model (pickle)')
     parser.add_argument('--save_dir', type=str, required=True,
                         help='Directory to save the processed output')
     parser.add_argument('--output_name', type=str, required=True,
                         help='Name of the output JSON file (e.g., smpl_model.json)')
+    parser.add_argument('--gmm', type=str, required=True,
+                        help='Path to the GMM prior (pickle)')
+    parser.add_argument('--openpose_joint_regressor', type=str, required=True,
+                        help='Path to the OpenPose joint regressor (.npy)')
     
     # Optional arguments
-    parser.add_argument('--gmm_path', type=str, default=None,
-                        help='Path to the GMM prior pickle file (Optional)')
     parser.add_argument('--capsule_regressor_path', type=str, default=None,
                         help='Path to the capsule regressors .npz file (Optional)')
 
@@ -68,20 +70,19 @@ def main():
         'kinematic_tree': to_array(data['kintree_table']).astype(np.int32)
     }
 
-    # Load GMM Prior (Optional)
-    if args.gmm_path:
-        print(f"Loading GMM Prior from: {args.gmm_path}")
-        with open(args.gmm_path, 'rb') as f:
-            gmm_data = pkl.load(f, encoding='latin1')
-        
-        if 'means' in gmm_data:
-            model_data['gmm_means'] = to_array(gmm_data['means'])
-            model_data['gmm_covars'] = to_array(gmm_data['covars'])
-            model_data['gmm_weights'] = to_array(gmm_data['weights'])
-        else:
-            print("Warning: GMM file did not contain expected keys (means, covars, weights)")
-    else:
-        print("No GMM path provided. Skipping GMM data.")
+    # Load GMM
+    print(f"Loading GMM from: {args.gmm}")
+    with open(args.gmm, 'rb') as fp:
+        gmm_data = pkl.load(fp, encoding='latin1')
+        model_data['gmm_means'] = to_array(gmm_data['means'])
+        model_data['gmm_covars'] = to_array(gmm_data['covars'])
+        model_data['gmm_weights'] = to_array(gmm_data['weights'])
+
+    # Load OpenPose Joint Regressor 
+    print(f"Loading OpenPose joint regressor from: {args.openpose_joint_regressor}")
+    with open(args.openpose_joint_regressor, 'rb') as fp:
+        model_data["openpose_joint_regressor"] = np.load(fp)
+    
 
     # Load Capsule Regressors (Optional)
     if args.capsule_regressor_path:

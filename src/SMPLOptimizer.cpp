@@ -2,64 +2,72 @@
 // Implements the SMPL fitting optimization pipeline.
 
 #include "SMPLOptimizer.h"
-#include "SMPLModel.h"
 #include "CameraModel.h"
+#include "SMPLModel.h"
+#include <algorithm>
 #include <ceres/ceres.h>
 #include <ceres/rotation.h>
 #include <cmath>
 #include <limits>
-#include <algorithm>
 #include <unordered_map>
 
 // SMPL (24) -> OpenPose BODY_25 Mapping
 static const std::unordered_map<int, int> SMPL_TO_OPENPOSE = {
-	{0, 8}, {12, 1}, // Torso
-	{1, 12},
-	{4, 13},
-	{7, 14}, // Left leg
-	{2, 9},
-	{5, 10},
-	{8, 11}, // Right leg
-	{16, 5},
-	{18, 6},
-	{20, 7}, // Left arm
+	{0, 8}, 
+	{12, 1}, 
+	{1, 12}, 
+	{4, 13}, 
+	{7, 14}, 
+	{2, 9}, 
+	{5, 10}, 
+	{8, 11}, 
+	{16, 5}, 
+	{18, 6}, 
+	{20, 7},
 	{17, 2},
-	{19, 3},
-	{21, 4} // Right arm
+	{19, 3}, 
+	{21, 4}
 };
 
-static const std::unordered_set<int> TORSO_SMPL_IDS = {1, 2, 16, 17};
-
 // Residual for step 1
-struct RigidReprojectionResidual
+struct InitReprojectionCost
 {
-	RigidReprojectionResidual(float X, float Y, float Z, const Point2D &keypoint,
-							  const CameraModel &camera)
-		: X_(X), Y_(Y), Z_(Z), keypoint_(keypoint), camera_(camera) {}
+	InitReprojectionCost(float X, float Y, float Z, float rootX, float rootY,
+						 float rootZ, const Point2D &keypoint,
+						 const CameraModel &camera)
+		: X_(X), Y_(Y), Z_(Z), rootX_(rootX), rootY_(rootY), rootZ_(rootZ),
+		  keypoint_(keypoint), camera_(camera) {}
 
 	template <typename T>
-	bool operator()(const T *const pose, T *residuals) const
+	bool operator()(const T *const translation, const T *const rotation,
+					T *residuals) const
 	{
-		// pose[0-2]: Angle-Axis rotation
-		// pose[3-5]: Translation
+		T point[3] = {T(X_), T(Y_), T(Z_)};
 
-		T p_in[3] = {T(X_), T(Y_), T(Z_)};
-		T p_cam[3];
+		// Rotation relative to SMPL root
+		T centeredPoint[3];
+		centeredPoint[0] = T(X_) - T(rootX_);
+		centeredPoint[1] = T(Y_) - T(rootY_);
+		centeredPoint[2] = T(Z_) - T(rootZ_);
 
-		ceres::AngleAxisRotatePoint(pose, p_in, p_cam);
+		// Rotation
+		T rotatedPoint[3];
+		ceres::AngleAxisRotatePoint(rotation, centeredPoint, rotatedPoint);
 
-		p_cam[0] += pose[3];
-		p_cam[1] += pose[4];
-		p_cam[2] += pose[5];
+		// Translation
+		T translatedPoint[3];
+		translatedPoint[0] = rotatedPoint[0] + translation[0] + T(rootX_);
+		translatedPoint[1] = rotatedPoint[1] + translation[1] + T(rootY_);
+		translatedPoint[2] = rotatedPoint[2] + translation[2] + T(rootZ_);
 
 		// Pinhole projection
 		const auto &K = camera_.intrinsics();
-		const T z_inv = T(1.0) / (p_cam[2] + T(1e-8));
+		const T z_inv = T(1.0) / (translatedPoint[2] + T(1e-8));
 
-		const T u = T(K.fx) * (p_cam[0] * z_inv) + T(K.cx);
-		const T v = T(K.fy) * (p_cam[1] * z_inv) + T(K.cy);
+		const T u = T(K.fx) * (translatedPoint[0] * z_inv) + T(K.cx);
+		const T v = T(K.fy) * (translatedPoint[1] * z_inv) + T(K.cy);
 
-		// Weighted Residuals
+		// Residual
 		const T weight = T(std::sqrt(keypoint_.score));
 		residuals[0] = weight * (u - T(keypoint_.x));
 		residuals[1] = weight * (v - T(keypoint_.y));
@@ -67,7 +75,10 @@ struct RigidReprojectionResidual
 		return true;
 	}
 
-	// 3D point in the SMPL model
+	// SMPL center join (pelvis)
+	float rootX_, rootY_, rootZ_;
+
+	// 3D point in SMPL
 	float X_, Y_, Z_;
 
 	// 2D point in image
@@ -77,35 +88,58 @@ struct RigidReprojectionResidual
 	const CameraModel &camera_;
 };
 
-// Residual for step 2
-struct PoseReprojectionCost
+// Residual for step 1
+// This depth regularizer is required otherwise the estimated depth explodes or vanish.
+struct InitDepthRegularizer
 {
-	PoseReprojectionCost(int smplJointIdx, const Point2D &keypoint,
-						 const CameraModel &camera,
-						 const Eigen::Matrix3d &globalR,
-						 const Eigen::Vector3d &globalT,
-						 const Eigen::Matrix<double, 24, 3> &J_rest,
-						 const SMPLModel &model)
-		: smplJointIdx_(smplJointIdx), keypoint_(keypoint), camera_(camera),
-		  globalR_(globalR), globalT_(globalT), J_rest_(J_rest), model_(model) {}
+	InitDepthRegularizer(double init_z) : init_z_(init_z) {}
 
 	template <typename T>
-	bool operator()(const T *const poseParamsPtr, T *residuals) const
+	bool operator()(const T *const translation, T *residual) const
+	{
+		// Residual
+		residual[0] = 1e4 * (translation[2] - T(init_z_));
+		return true;
+	}
+	double init_z_;
+};
+
+// Residual for step 2
+struct ReprojectionCost
+{
+	ReprojectionCost(
+		int smplJointIdx, const Point2D &keypoint,
+		const CameraModel &camera, const SMPLModel &model,
+		const Eigen::MatrixXd &J_mean, const std::vector<Eigen::MatrixXd> &J_dirs
+	)
+	: 	smplJointIdx_(smplJointIdx), keypoint_(keypoint), 
+		camera_(camera), model_(model),
+		J_mean_(J_mean), J_dirs_(J_dirs) {}
+
+	template <typename T>
+	bool operator()(const T *const globalTPtr, const T *const poseParamsPtr,
+					const T *const shapeParamsPtr, T *residuals) const
 	{
 		// Map raw pointer to Eigen vector
+		Eigen::Map<const Eigen::Matrix<T, 3, 1>> globalT(globalTPtr);
 		Eigen::Map<const Eigen::Matrix<T, 72, 1>> poseParams(poseParamsPtr);
+		Eigen::Map<const Eigen::Matrix<T, 10, 1>> shapeParams(shapeParamsPtr);
 
-		// Cast rest joints to type T for AutoDiff
-		Eigen::Matrix<T, 24, 3> J_rest_T = J_rest_.template cast<T>();
+		// Apply shape and compute joints
+    	Eigen::Matrix<T, 24, 3> J_rest = J_mean_.cast<T>(); 
+		for (int i = 0; i < shapeParams.size(); ++i) {
+			J_rest += J_dirs_[i].cast<T>() * shapeParams[i];
+		}
 
 		// Apply SMPL Forward Kinematics
-		auto poseResult = model_.applyPose<T>(poseParams, J_rest_T);
+		auto poseResult = model_.applyPose<T>(poseParams, J_rest);
 
 		// Get specific joint position
-		Eigen::Matrix<T, 3, 1> jointPos = poseResult.posedJoints.row(smplJointIdx_).transpose();
+		Eigen::Matrix<T, 3, 1> jointPos =
+			poseResult.posedJoints.row(smplJointIdx_).transpose();
 
-		// Apply Global Rigid Transform (R * p + t)
-		Eigen::Matrix<T, 3, 1> pCam = globalR_.cast<T>() * jointPos + globalT_.cast<T>();
+		// Apply global translation
+		Eigen::Matrix<T, 3, 1> pCam = jointPos + globalT;
 
 		// Pinhole projection
 		const auto &K = camera_.intrinsics();
@@ -131,253 +165,411 @@ struct PoseReprojectionCost
 	// Camera model with intrinsic parameters for 3D->2D projection.
 	const CameraModel &camera_;
 
-	// SMPL instance used to compute joints from pose parameters.
+	// SMPL instance.
 	const SMPLModel &model_;
 
-	// Global rotation matrix (calculated in Step 1).
-	Eigen::Matrix3d globalR_;
-
-	// Global translation vector (calculated in Step 1).
-	Eigen::Vector3d globalT_;
-
-	// Pre-computed rest joint locations (based on shape) to avoid re-calculating
-	// shape inside the loop. I added this to optimize performance
-	Eigen::Matrix<double, 24, 3> J_rest_;
+	// Precomputed variables
+	const Eigen::MatrixXd &J_mean_;
+	const std::vector<Eigen::MatrixXd> &J_dirs_;
 };
 
-SMPLOptimizer::SMPLOptimizer(SMPLModel *smplModel_,
-								   CameraModel *cameraModel_,
-								   const Options &options_)
+// Residual for step 2
+struct GMMPosePriorCost
+{
+	GMMPosePriorCost(const SMPLModel &model)
+	: model_(model) {}
+
+	template <typename T>
+	bool operator()(const T *const poseParamsPtr, T *residuals) const
+	{
+		// Map raw pointer to Eigen vector
+		Eigen::Map<const Eigen::Matrix<T, 72, 1>> poseParams(poseParamsPtr);
+
+        int best_gaussian = -1;
+        T min_energy = T(std::numeric_limits<double>::max());
+
+        // We need to store the projected difference vector (L * (x - mu)) 
+        // for the best Gaussian to compute the final residuals.
+        Eigen::Matrix<T, 69, 1> best_projected_diff;
+
+		// SMPL model data
+		const Eigen::MatrixXd gmmMeans = model_.getGmmMeans();
+		const Eigen::MatrixXd gmmWeights = model_.getGmmWeights();
+		const std::vector<Eigen::MatrixXd> gmmPrecChols = model_.getGmmPrecChols();
+
+		int n_gaussians = gmmMeans.rows();
+		int n_dims = gmmMeans.cols();
+
+        for (int k = 0; k < n_gaussians; ++k) 
+		{
+            Eigen::Matrix<T, 69, 1> mean = gmmMeans.row(k).cast<T>();
+            
+            // Compute difference to gaussian mean
+            Eigen::Matrix<T, 69, 1> diff = poseParams.segment(3, 69) - mean;
+
+            // Project: L^T * (x - mu)
+            Eigen::Matrix<T, 69, 1> projected_diff = gmmPrecChols[k].cast<T>() * diff;
+
+            // Calculate Energy
+            T dist_sq = projected_diff.squaredNorm();
+            T total_energy = T(0.5) * dist_sq - T(std::log(gmmWeights(k)));
+
+            // Keep best gaussian
+            if (total_energy < min_energy) {
+                min_energy = total_energy;
+                best_gaussian = k;
+                best_projected_diff = projected_diff;
+            }
+        }
+
+        // Residual
+        // [0..68]: Scaled geometric error -> sqrt(0.5) * (L * (x-u))
+        // [69]:    Constant statistical error -> sqrt(-log(w))
+
+        // Scaled Geometric Error
+        const T scale = T(std::sqrt(0.5));
+        for (int i = 0; i < 69; ++i) {
+            residuals[i] = scale * best_projected_diff(i);
+        }
+
+        // Constant statistical error 
+        // This ensures the optimizer fights to stay in high-probability clusters
+        residuals[69] = T(std::sqrt(-std::log(gmmWeights(best_gaussian))));
+
+        return true;
+	}
+
+	// SMPL instance.
+	const SMPLModel &model_;
+};
+
+// Residual for step 2
+struct ShapePriorCost
+{
+	template <typename T>
+	bool operator()(const T *const shape, T *residuals) const
+	{
+		// Skip global rotation (first 3)
+		for (int i = 0; i < 10; ++i)
+		{
+			residuals[i] = shape[i];
+		}
+		return true;
+	}
+};
+
+// Residual for step 2
+struct JointLimitCost
+{
+	template <typename T>
+	bool operator()(const T *const pose, T *residuals) const
+	{
+
+		const T alpha = T(10.0);
+
+		// 55: Left Elbow
+		residuals[0] = alpha * ceres::exp(pose[55]);
+
+		// 58: Right Elbow
+		residuals[1] = alpha * ceres::exp(-pose[58]);
+
+		// 12: Left Knee
+		residuals[2] = alpha * ceres::exp(-pose[12]);
+
+		// 15: Right Knee
+		residuals[3] = alpha * ceres::exp(-pose[15]);
+
+		return true;
+	}
+};
+
+SMPLOptimizer::SMPLOptimizer(SMPLModel *smplModel_, CameraModel *cameraModel_,
+							 const Options &options_)
 	: smplModel(smplModel_), cameraModel(cameraModel_), options(options_)
 {
 	poseParams.assign(72, 0.0);
 	shapeParams.assign(10, 0.0);
-	poseHistory.clear();
-	shapeHistory.clear();
 	hasPreviousFrame_ = false;
 }
 
 void SMPLOptimizer::fitFrame(const Pose2D &observation)
 {
-	// Reset diagnostics for this frame
-    lastFitRigidCost_  = -1.0;
-    lastFitRigidIters_ = 0;
-    lastFitPoseCost_   = -1.0;
-    lastFitPoseIters_  = 0;
+	// If OpenPose returns no detections skip
+	if (observation.keypoints.size() == 0)
+		return;
 
-	// Warm-starting mode
-	if (!options.warmStarting)
-    {
-        // Cold start: reset SMPL parameters and global transform every frame
-        std::fill(poseParams.begin(), poseParams.end(), 0.0);
-        std::fill(shapeParams.begin(), shapeParams.end(), 0.0);
+	fitRigid(observation);
+	fitPose(observation);
 
-        // Keep SMPLModel internal state consistent with our vectors
-        smplModel->setPose(poseParams);
-        smplModel->setShape(shapeParams);
-
-        globalR_ = Eigen::Matrix3d::Identity();
-        globalT_ = Eigen::Vector3d::Zero();
-
-        fitRigid(observation);
-        fitPose(observation);
-
-        // In cold-start mode we conceptually don't use previous-frame state
-        hasPreviousFrame_ = false;
-        return;
-    }
-
-    // Warm-starting mode
-    if (!hasPreviousFrame_)
-    {
-        // First frame: run full optimization to initialize pose + global transform
-        fitRigid(observation);
-        fitPose(observation);
-        hasPreviousFrame_ = true;
-    }
-    else
-    {
-        // Subsequent frames: reuse previous poseParams and globalR_/globalT_
-        // fitPose() already initializes from current poseParams.
-        fitPose(observation);
-    }
+	return;
 }
 
 void SMPLOptimizer::fitRigid(const Pose2D &observation)
 {
-	// Get Rest Joints from current shape
-	Eigen::Map<Eigen::VectorXd> shapeVec(shapeParams.data(), shapeParams.size());
-	auto shapeResult = smplModel->applyShape<double>(shapeVec);
+	// Get rest joints from shape parameters
+	Eigen::Map<Eigen::VectorXd> shapeParamsVector(shapeParams.data(),
+												  shapeParams.size());
+	auto shapeResult = smplModel->applyShape<double>(shapeParamsVector);
 	Eigen::Matrix<double, 24, 3> smplJoints = shapeResult.restJoints;
 
-	// Initialize Global Pose via Similar Triangles
-	double init_tx = 0.0, init_ty = 0.0, init_tz = 2.50;
+	// Initialize depth
+	double init_tz = 2.50;
 
-	std::vector<double> torso3D_y, torso2D_y;
-	double sum3D_x = 0, sum3D_y = 0;
-	double sum2D_x = 0, sum2D_y = 0;
-	int count = 0;
+	// Pairs:
+	// Right Shoulder (17) and Right Hip (2)
+	// Left Shoulder (16) and Left Hip (1)
+	std::vector<std::pair<int, int>> torsoPairs = {{17, 2}, {16, 1}};
 
-	for (const auto &[smplIdx, opIdx] : SMPL_TO_OPENPOSE)
+	double totalDistance3D = 0.0;
+	double totalDistance2D = 0.0;
+	int validPairs = 0;
+
+	for (const auto &pair : torsoPairs)
 	{
-		if (TORSO_SMPL_IDS.find(smplIdx) == TORSO_SMPL_IDS.end())
-			continue;
-		if (opIdx >= (int)observation.keypoints.size())
+		// Keypoint indexes according to SMPL
+		int shoulderSmplIdx = pair.first;
+		int hipSmplIdx = pair.second;
+
+		// Keypoint indexes according to OpenPose
+		int shoulderOpIdx = SMPL_TO_OPENPOSE.at(shoulderSmplIdx);
+		int hipOpIdx = SMPL_TO_OPENPOSE.at(hipSmplIdx);
+
+		// Get OpenPose keypoints
+		const Point2D &shoulderKeypoint = observation.keypoints[shoulderOpIdx];
+		const Point2D &hipKeypoint = observation.keypoints[hipOpIdx];
+
+		// Ignore pair with low confidence
+		if (shoulderKeypoint.score < 0.1 || hipKeypoint.score < 0.1)
 			continue;
 
-		const Point2D &kp = observation.keypoints[opIdx];
-		if (kp.score < 0.4f)
-			continue;
+		// Calculate 3D Distance
+		double distance3D =
+			(smplJoints.row(shoulderSmplIdx) - smplJoints.row(hipSmplIdx)).norm();
 
-		torso3D_y.push_back(smplJoints(smplIdx, 1));
-		torso2D_y.push_back(kp.y);
-		sum3D_x += smplJoints(smplIdx, 0);
-		sum3D_y += smplJoints(smplIdx, 1);
-		sum2D_x += kp.x;
-		sum2D_y += kp.y;
-		count++;
+		// Calculate 2D Distance
+		double dx = shoulderKeypoint.x - hipKeypoint.x;
+		double dy = shoulderKeypoint.y - hipKeypoint.y;
+		double distance2D = std::sqrt(dx * dx + dy * dy);
+
+		validPairs += 1;
+		totalDistance3D += distance3D;
+		totalDistance2D += distance2D;	
 	}
 
-	if (count >= 2)
+	if (validPairs > 0)
 	{
-		// Camera intrinsics
 		const auto &K = cameraModel->intrinsics();
-
-		// Estimate Depth (Z) based on torso height
-		const auto [min3D, max3D] = std::minmax_element(torso3D_y.begin(), torso3D_y.end());
-		const auto [min2D, max2D] = std::minmax_element(torso2D_y.begin(), torso2D_y.end());
-
-		double h3D = *max3D - *min3D;
-		double h2D = *max2D - *min2D;
-
-		if (h2D > 1.0)
-		{
-			init_tz = K.fy * (h3D / h2D);
-		}
-
-		// Estimate Translation (X, Y) based on centroids
-		double c3D_x = sum3D_x / count;
-		double c3D_y = sum3D_y / count;
-
-		double c2D_x = sum2D_x / count;
-		double c2D_y = sum2D_y / count;
-
-		double cx_cam = (c2D_x - K.cx) * init_tz / K.fx;
-		double cy_cam = (c2D_y - K.cy) * init_tz / K.fy;
-
-		init_tx = cx_cam - c3D_x;
-		init_ty = cy_cam - c3D_y;
+		init_tz = K.fy * (totalDistance3D / totalDistance2D);
 	}
 
-	// Optimization (Torso Only)
-	// Try two initial poses and keep the one with lower cost
-	// This is done to fix the initial orientation issue
-	double initPoses[2][6] = {
-		{M_PI, 0.0, 0.0, init_tx, init_ty, init_tz},
-		{M_PI, 0.0, M_PI, init_tx, init_ty, init_tz}
-	};
+	// Optimization
+	ceres::Problem problem;
 
-	double bestPose[6];
-	double bestCost = std::numeric_limits<double>::max();
-	int    bestIters = 0;
+	// Variables to be optimized
+	std::vector<double> translation = {0.0, 0.0, init_tz};
+	std::vector<double> rotation = {0.0, 0.0, 0.0};
 
-	for (int poseIdx = 0; poseIdx < 2; ++poseIdx)
+	// Torso keypoint indexes
+	std::vector<int> torsoIdxs = {17, 2, 16, 1};
+
+	for (int smplIdx : torsoIdxs)
 	{
+		int opIdx = SMPL_TO_OPENPOSE.at(smplIdx);
+		const Point2D &kp = observation.keypoints[opIdx];
 
-		ceres::Problem problem;
+		ceres::CostFunction *projectionCost =
+			new ceres::AutoDiffCostFunction<InitReprojectionCost, 2, 3, 3>(
+				new InitReprojectionCost(
+					// Current joint
+					smplJoints(smplIdx, 0), smplJoints(smplIdx, 1), smplJoints(smplIdx, 2),
+					// Root joint
+					smplJoints(0, 0), smplJoints(0, 1), smplJoints(0, 2),
+					// 2D Keypoint
+					kp,
+					// Camera
+					*cameraModel)
+				);
 
-		double pose[6];
-		std::copy(initPoses[poseIdx], initPoses[poseIdx] + 6, pose);
-
-		for (const auto &[smplIdx, opIdx] : SMPL_TO_OPENPOSE)
-		{
-			if (TORSO_SMPL_IDS.find(smplIdx) == TORSO_SMPL_IDS.end())
-				continue;
-			if (opIdx >= (int)observation.keypoints.size())
-				continue;
-
-			const Point2D &kp = observation.keypoints[opIdx];
-			if (kp.score < 0.2f)
-				continue;
-
-			ceres::CostFunction *cost =
-				new ceres::AutoDiffCostFunction<RigidReprojectionResidual, 2, 6>(
-					new RigidReprojectionResidual(
-						smplJoints(smplIdx, 0), smplJoints(smplIdx, 1),
-						smplJoints(smplIdx, 2), kp, *cameraModel));
-
-			problem.AddResidualBlock(cost, new ceres::HuberLoss(1.0), pose);
-		}
-
-		ceres::Solver::Options options;
-		options.max_num_iterations = 50;
-		options.linear_solver_type = ceres::DENSE_QR;
-		options.minimizer_progress_to_stdout = false;
-
-		ceres::Solver::Summary summary;
-		ceres::Solve(options, &problem, &summary);
-
-		// Keep the pose with lower final cost
-		if (summary.final_cost < bestCost)
-		{
-			bestCost = summary.final_cost;
-			bestIters = summary.num_successful_steps;
-			std::copy(pose, pose + 6, bestPose);
-		}
+		// Add reprojection residual
+		problem.AddResidualBlock(
+			projectionCost, nullptr, translation.data(), rotation.data()
+		);
 	}
 
-	// Store Optimized Rigid Transform
-	Eigen::Vector3d r_vec(bestPose[0], bestPose[1], bestPose[2]);
-	globalR_ = Eigen::AngleAxisd(r_vec.norm(), r_vec.normalized()).toRotationMatrix();
-	globalT_ = Eigen::Vector3d(bestPose[3], bestPose[4], bestPose[5]);
+	// Add depth regularizer residual
+	ceres::CostFunction *regularizerCost =
+		new ceres::AutoDiffCostFunction<InitDepthRegularizer, 1, 3>(
+			new InitDepthRegularizer(init_tz));
+	problem.AddResidualBlock(regularizerCost, nullptr, translation.data());
 
-	// Store diagnostics
-	lastFitRigidCost_  = bestCost;
-	lastFitRigidIters_ = bestIters;
+	ceres::Solver::Summary summary;
+
+	ceres::Solver::Options options;
+	options.max_num_iterations = 100;
+	options.linear_solver_type = ceres::DENSE_QR;
+	options.minimizer_progress_to_stdout = false;
+
+	ceres::Solve(options, &problem, &summary);
+
+	// Store estimated transformation
+	globalT_ = Eigen::Vector3d(translation[0], translation[1], translation[2]);
+	poseParams[0] = rotation[0];
+	poseParams[1] = rotation[1];
+	poseParams[2] = rotation[2];
+	smplModel->setPose(poseParams);
+
+	// // Store diagnostics
+	// lastFitRigidCost_ = summary.final_cost;
+	// lastFitRigidIters_ = summary.num_successful_steps;
 }
 
 void SMPLOptimizer::fitPose(const Pose2D &observation)
 {
-	// Pre-compute rest-pose joints
-	Eigen::Map<Eigen::VectorXd> shapeVec(shapeParams.data(), shapeParams.size());
-	auto shapeResult = smplModel->applyShape<double>(shapeVec);
-	Eigen::Matrix<double, 24, 3> J_rest = shapeResult.restJoints;
+	// SMPL data 
+	const Eigen::MatrixXd& T_mean = smplModel->getTemplateVertices(); 
+    const Eigen::MatrixXd& J_reg  = smplModel->getJointRegressor();     
+    const Eigen::MatrixXd& S_dirs = smplModel->getShapeBlendShapes();
 
-	// Initialize with current pose
-	std::vector<double> poseOptim = poseParams;
+	// Precompute J_mean
+	const Eigen::MatrixXd J_mean =  J_reg * T_mean;
 
-	ceres::Problem problem;
+	// Precompute J_dirs
+	std::vector<Eigen::MatrixXd> J_dirs(10);
+    for (int i = 0; i < 10; ++i) {
+        // Get vector coresponding to beta[i]
+        Eigen::VectorXd shape_vector = S_dirs.col(i); 
+        
+        // Reshape  (20670, 1) to (6890, 3)
+        Eigen::Map<const Eigen::Matrix<double, 6890, 3, Eigen::RowMajor>> 
+    		shape_vector_reshaped(shape_vector.data());
 
-	for (const auto &[smplIdx, opIdx] : SMPL_TO_OPENPOSE)
+		// Compute J_dirs
+        J_dirs[i] = J_reg * shape_vector_reshaped;
+    }
+
+	Eigen::Vector3d bestTranslation;
+	std::vector<double> bestShape;
+	std::vector<double> bestPose;
+	double bestCost = std::numeric_limits<double>::max();
+
+	for (int orientation = 0; orientation < 2; orientation++)
 	{
-		if (opIdx >= (int)observation.keypoints.size())
-			continue;
+		// Parameters to be optimized
+		Eigen::Vector3d currentTranslation = globalT_;
+		std::vector<double> currentShape = shapeParams;
+		std::vector<double> currentPose = poseParams;
 
-		const Point2D &kp = observation.keypoints[opIdx];
-		if (kp.score < 0.2f)
-			continue;
+		if (orientation == 1)
+		{
+			// Convert to matrix
+			Eigen::Vector3d r_vec(currentPose[0], currentPose[1], currentPose[2]);
+			Eigen::Matrix3d r_matrix =
+				Eigen::AngleAxisd(r_vec.norm(), r_vec.normalized())
+					.toRotationMatrix();
 
-		ceres::CostFunction *cost =
-			new ceres::AutoDiffCostFunction<PoseReprojectionCost, 2, 72>(
-				new PoseReprojectionCost(smplIdx, kp, *cameraModel, globalR_,
-										 globalT_, J_rest, *smplModel));
+			// Invert orientation
+			Eigen::Matrix3d Ry;
+			Ry << -1, 0, 0, 0, 1, 0, 0, 0, -1;
+			r_matrix = r_matrix * Ry;
 
-		problem.AddResidualBlock(cost, new ceres::HuberLoss(1.0), poseOptim.data());
+			// Convert back to parameters
+			Eigen::AngleAxisd new_r(r_matrix);
+			Eigen::Vector3d r_parameters = new_r.angle() * new_r.axis();
+			currentPose[0] = r_parameters[0];
+			currentPose[1] = r_parameters[1];
+			currentPose[2] = r_parameters[2];
+		}
+
+		// Official SMPLify weights schedule
+		std::vector<std::pair<double, double>> weights = {{4.04 * 1e2, 1e2},
+														  {4.04 * 1e2, 5 * 1e1},
+														  {57.4, 1e1},
+														  {4.78, 0.5 * 1e1}};
+
+		double finalCost;
+
+		for (int stage = 0; stage < 4; stage++)
+		{
+
+			double poseWeight = weights[stage].first;
+			double shapeWeight = weights[stage].second;
+			double jointLimitsWeight = 0.317 * poseWeight;
+
+			ceres::Problem problem;
+
+			// Add reprojection cost for each keypoint
+			for (const auto &[smplIdx, opIdx] : SMPL_TO_OPENPOSE)
+			{
+				const Point2D &kp = observation.keypoints[opIdx];
+
+				if (kp.score < 0.2)
+				{
+					continue;
+				}
+
+				ceres::CostFunction *cost =
+					new ceres::AutoDiffCostFunction<ReprojectionCost, 2, 3, 72, 10>(
+						new ReprojectionCost(smplIdx, kp, *cameraModel, *smplModel, J_mean, J_dirs));
+
+				problem.AddResidualBlock(cost, nullptr,
+										 currentTranslation.data(), currentPose.data(),
+										 currentShape.data());
+			}
+
+			// Add pose prior cost
+			ceres::CostFunction *gmmPosePriorCost =
+				new ceres::AutoDiffCostFunction<GMMPosePriorCost, 70, 72>(
+					new GMMPosePriorCost(*smplModel));
+			problem.AddResidualBlock(gmmPosePriorCost,
+									 new ceres::ScaledLoss(nullptr,
+														   poseWeight*poseWeight,
+														   ceres::TAKE_OWNERSHIP),
+									 currentPose.data());
+
+			// Add shape prior cost
+			ceres::CostFunction *shapePriorCost =
+				new ceres::AutoDiffCostFunction<ShapePriorCost, 10, 10>(
+					new ShapePriorCost());
+			problem.AddResidualBlock(shapePriorCost,
+									 new ceres::ScaledLoss(nullptr,
+														   shapeWeight*shapeWeight,
+														   ceres::TAKE_OWNERSHIP),
+									 currentShape.data());
+
+			// Add joint limits cost
+			ceres::CostFunction *jointLimitCost =
+				new ceres::AutoDiffCostFunction<JointLimitCost, 4, 72>(
+					new JointLimitCost());
+			problem.AddResidualBlock(
+				jointLimitCost,
+				new ceres::ScaledLoss(nullptr, jointLimitsWeight*jointLimitsWeight,
+									  ceres::TAKE_OWNERSHIP),
+				currentPose.data());
+
+			// Solve
+			ceres::Solver::Options solverOptions;
+			solverOptions.max_num_iterations = 100;
+			solverOptions.linear_solver_type = ceres::DENSE_QR;
+			solverOptions.minimizer_progress_to_stdout = false;
+
+			ceres::Solver::Summary summary;
+			ceres::Solve(solverOptions, &problem, &summary);
+
+			finalCost = summary.final_cost;
+		}
+
+		if (finalCost < bestCost)
+		{
+			bestCost = finalCost;
+			bestTranslation = currentTranslation;
+			bestPose = currentPose;
+		}
 	}
 
-	ceres::Solver::Options solverOptions;
-	solverOptions.max_num_iterations = 100;
-	solverOptions.linear_solver_type = ceres::DENSE_QR;
-	solverOptions.minimizer_progress_to_stdout = false;
+	// Update optimizer state
+	globalT_ = bestTranslation;
+	poseParams = bestPose;
 
-	ceres::Solver::Summary summary;
-	ceres::Solve(solverOptions, &problem, &summary);
-
-	// Update SMPL Model State
-	poseParams = poseOptim;
+	// Update SMPL model
 	smplModel->setPose(poseParams);
-
-	// Store diagnostics
-	lastFitPoseCost_  = summary.final_cost;
-	lastFitPoseIters_ = summary.num_successful_steps;
 }

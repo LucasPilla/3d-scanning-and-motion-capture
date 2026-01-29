@@ -129,7 +129,6 @@ void Visualization::drawJoints(cv::Mat &frame,
 
 void Visualization::drawMesh(cv::Mat &frame, const SMPLMesh &mesh,
 							 const CameraModel &camera,
-							 const Eigen::Matrix3d &globalR,
 							 const Eigen::Vector3d &globalT,
 							 const cv::Scalar &color, int lineThickness)
 {
@@ -151,7 +150,7 @@ void Visualization::drawMesh(cv::Mat &frame, const SMPLMesh &mesh,
 
 		// Apply global transform (camera-to-body alignment)
 		Eigen::Vector3d pWorld(v.x(), v.y(), v.z());
-		Eigen::Vector3d pCam = globalR * pWorld + globalT;
+		Eigen::Vector3d pCam = pWorld + globalT;
 
 		// Skip if behind camera
 		if (pCam.z() < 0.1)
