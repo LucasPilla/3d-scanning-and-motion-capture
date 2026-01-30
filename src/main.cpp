@@ -1,6 +1,6 @@
 // main.cpp
 // ---------
-// Pipeline entry point.
+// Pipeline entry point for SMPL body model fitting.
 
 #include "CameraModel.h"
 #include "PoseDetector.h"
@@ -9,432 +9,239 @@
 #include "VideoLoader.h"
 #include "Visualization.h"
 
-#include <Eigen/Dense>
-#include <ceres/ceres.h>
 #include <argparse/argparse.hpp>
-#include <filesystem>
-#include <iostream>
-
 #include <nlohmann/json.hpp>
-using nlohmann::json;
+#include <Eigen/Dense>
 
 #include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <optional>
+
+namespace fs = std::filesystem;
+using json = nlohmann::json;
 using Clock = std::chrono::steady_clock;
 
-struct FrameTimings
-{
-	double pose_detection_ms = 0.0;
-	double fit_rigid_ms = 0.0;
-	double fit_pose_ms = 0.0;
-	double compute_mesh_ms = 0.0;
-	double draw_mesh_ms = 0.0;
-	double total_frame_ms = 0.0;
+struct DebugData {
+    json config;                    // Pipeline configuration
+    std::vector<json> frames;       // Per-frame data
+    
+    void save(const fs::path& path) const {
+        json output;
+        output["config"] = config;
+        output["frames"] = frames;
+        
+        std::ofstream file(path);
+        if (file.is_open()) {
+            file << output.dump(2);
+            std::cout << "[DEBUG] Saved to " << path << "\n";
+        } else {
+            std::cerr << "[DEBUG] Failed to save to " << path << "\n";
+        }
+    }
 };
 
-struct FrameDebugEntry
-{
-	int frame_index = 0;
-	int num_keypoints = 0;
-
-	std::vector<Point2D> keypoints_2d;
-
-	// Optimizer outputs
-	Eigen::Vector3d globalT;
-	std::vector<double> pose_params;
-	std::vector<double> shape_params;
-
-	// NEW: timings
-	FrameTimings timings;
-
-	std::vector<std::array<double, 3>> joints3d;
-	std::string mesh_obj_path;
-
-	// Optimization diagnostics
-	double fit_rigid_final_cost = -1.0;
-	int fit_rigid_iterations = 0;
-	double fit_pose_final_cost = -1.0;
-	int fit_pose_iterations = 0;
-};
-
-struct PipelineDebugLog
-{
-	// CLI / general settings
-	std::string video_path;
-	std::string smpl_path;
-	std::string output_folder;
-	bool used_precomputed_keypoints = false;
-	std::string precomputed_keypoints_path; // empty if not used
-	bool used_debug_frame = false;
-	int debug_frame_index = -1;
-
-	// Optimizer options
-	SMPLOptimizer::Options optimizer_options;
-
-	// Camera / video info
-	int frame_width = 0;
-	int frame_height = 0;
-	double fps = 0.0;
-	double fx = 0.0;
-	double fy = 0.0;
-	double cx = 0.0;
-	double cy = 0.0;
-
-	// Per-frame entries
-	std::vector<FrameDebugEntry> frames;
-};
-
-inline void to_json(json &j, const SMPLOptimizer::Options &opt)
-{
-	j = json{
-		{"temporalRegularization", opt.temporalRegularization},
-		{"warmStarting", opt.warmStarting},
-		{"freezeShapeParameters", opt.freezeShapeParameters},
-	};
-}
-
-inline void to_json(json &j, const FrameDebugEntry &f)
-{
-	j = json{};
-	j["frame_index"] = f.frame_index;
-	j["num_keypoints"] = f.num_keypoints;
-
-	// 2D keypoints
-	json kps = json::array();
-	for (const auto &kp : f.keypoints_2d)
-	{
-		kps.push_back(json{
-			{"x", kp.x},
-			{"y", kp.y},
-			{"score", kp.score},
-		});
-	}
-	j["keypoints_2d"] = std::move(kps);
-
-	// Global translation (3)
-	json T = json::array();
-	T.push_back(f.globalT(0));
-	T.push_back(f.globalT(1));
-	T.push_back(f.globalT(2));
-	j["globalT"] = std::move(T);
-
-	// Pose and shape params as flat arrays
-	j["pose_params"] = f.pose_params;
-	j["shape_params"] = f.shape_params;
-
-	// Timings
-	json jt;
-	jt["pose_detection_ms"] = f.timings.pose_detection_ms;
-	jt["fit_rigid_ms"] = f.timings.fit_rigid_ms;
-	jt["fit_pose_ms"] = f.timings.fit_pose_ms;
-	jt["compute_mesh_ms"] = f.timings.compute_mesh_ms;
-	jt["draw_mesh_ms"] = f.timings.draw_mesh_ms;
-	jt["total_frame_ms"] = f.timings.total_frame_ms;
-	j["timings"] = std::move(jt);
-
-	// 3D joints
-	json joints = json::array();
-	for (const auto &p : f.joints3d)
-	{
-		joints.push_back(json::array({p[0], p[1], p[2]}));
-	}
-	j["joints3d"] = std::move(joints);
-
-	// Mesh path
-	j["mesh_obj_path"] = f.mesh_obj_path;
-
-	// Optimization diagnostics
-	json jc;
-	jc["fit_rigid_final_cost"] = f.fit_rigid_final_cost;
-	jc["fit_rigid_iterations"] = f.fit_rigid_iterations;
-	jc["fit_pose_final_cost"] = f.fit_pose_final_cost;
-	jc["fit_pose_iterations"] = f.fit_pose_iterations;
-	j["optimizer_costs"] = std::move(jc);
-}
-
-inline void to_json(json &j, const PipelineDebugLog &p)
-{
-	j = json{}; // start with an empty object
-
-	// CLI / general
-	j["video_path"] = p.video_path;
-	j["smpl_path"] = p.smpl_path;
-	j["output_folder"] = p.output_folder;
-	j["used_precomputed_keypoints"] = p.used_precomputed_keypoints;
-	j["precomputed_keypoints_path"] = p.precomputed_keypoints_path;
-	j["used_debug_frame"] = p.used_debug_frame;
-	j["debug_frame_index"] = p.debug_frame_index;
-
-	// Optimizer
-	j["optimizer_options"] = p.optimizer_options;
-
-	// Camera / video
-	j["frame_width"] = p.frame_width;
-	j["frame_height"] = p.frame_height;
-	j["fps"] = p.fps;
-	j["fx"] = p.fx;
-	j["fy"] = p.fy;
-	j["cx"] = p.cx;
-	j["cy"] = p.cy;
-
-	// Per-frame
-	j["frames"] = p.frames;
-}
-
-int main(int argc, char *argv[])
-{
-
-	argparse::ArgumentParser program("pipeline");
-
-	// Pipeline requires a video path
-	program.add_argument("--video-path").help("Path to video file").required();
-
-	// Pipeline requires a SMPL model path
-	program.add_argument("--smpl-path")
-		.help("Path to model generated by preprocess.py (.json)")
-		.required();
-
-	// Optional path to output folder
-	// Default is "./output"
-	program.add_argument("--output")
-		.help("Output folder to save results.")
-		.default_value("./output");
-
-	// Optional path to pre-computed keypoints
-	// If not defined, OpenPose will run for each frame
-	program.add_argument("--precomputed-keypoints")
-		.help("Path to pre-computed keypoints (.json)");
-
-	// Optional: process only a single frame and save debug images
-	program.add_argument("--debug-frame")
-		.help(
-			"If set, process only this 1-based frame index and save debug images")
-		.scan<'i', int>();
-
-	// Optional flag to enable debug logging
-	program.add_argument("--debug-log")
-		.help("If set, save per-frame debug data (JSON, meshes, etc.)")
-		.default_value(false)
-		.implicit_value(true);
-
-	try
-	{
-		// Parse args
-		program.parse_args(argc, argv);
-	}
-	catch (const std::runtime_error &err)
-	{
-		// This block runs if the user forgets the argument
-		std::cerr << err.what() << std::endl;
-		std::cerr << program;
-		std::exit(1);
-	}
-
-	// Load command line arguments into variables
-	std::string videoPath = program.get("--video-path");
-
-	std::string smplPath = program.get("--smpl-path");
-
-	std::filesystem::path outputFolder = program.get("--output");
-
-	std::optional<std::string> precomputedKeypointsPath = std::nullopt;
-	if (program.is_used("--precomputed-keypoints"))
-		precomputedKeypointsPath = program.get("--precomputed-keypoints");
-
-	std::optional<int> debugFrame = std::nullopt;
-	if (program.is_used("--debug-frame"))
-		debugFrame = program.get<int>("--debug-frame");
-
-	bool debugLogEnabled = program.get<bool>("--debug-log");
-
-	// Create output folder
-	std::filesystem::create_directory(outputFolder);
-
-	// Initialize video loader
-	VideoLoader loader(videoPath);
-
-	// Initialize pose detector
-	PoseDetector poseDetector(precomputedKeypointsPath);
-
-	// Initialize output video writer
-	Visualization visualizer(loader.width(), loader.height(), loader.fps());
-
-	// Initialize simple pinhole camera intrinsics (approximate)
-	double fx = static_cast<double>(loader.width());
-	double fy = static_cast<double>(loader.width());
-	double cx = static_cast<double>(loader.width()) / 2.0f;
-	double cy = static_cast<double>(loader.height()) / 2.0f;
-	CameraModel cameraModel(fx, fy, cx, cy);
-
-	// Load SMPL model (preprocessed JSON).
-	SMPLModel smplModel;
-	if (!smplModel.loadFromJson(smplPath))
-	{
-		std::cerr << "Warning: Failed to load SMPL model from " << smplPath
-				  << std::endl;
-	}
-
-	// Configure optimizer fitting options (flags).
-	SMPLOptimizer::Options fitOpts;
-	fitOpts.temporalRegularization = true;
-	fitOpts.warmStarting = true;
-	fitOpts.freezeShapeParameters = false;
-
-	// Minimal debug log container
-	PipelineDebugLog debugLog;
-	if (debugLogEnabled)
-	{
-		// CLI
-		debugLog.video_path = videoPath;
-		debugLog.smpl_path = smplPath;
-		debugLog.output_folder = outputFolder.string();
-		debugLog.used_precomputed_keypoints = precomputedKeypointsPath.has_value();
-		debugLog.precomputed_keypoints_path = precomputedKeypointsPath.value_or("");
-		debugLog.used_debug_frame = debugFrame.has_value();
-		debugLog.debug_frame_index = debugFrame.value_or(-1);
-
-		// Optimizer options
-		debugLog.optimizer_options = fitOpts;
-
-		// Camera / video
-		debugLog.frame_width = loader.width();
-		debugLog.frame_height = loader.height();
-		debugLog.fps = loader.fps();
-		debugLog.fx = fx;
-		debugLog.fy = fy;
-		debugLog.cx = cx;
-		debugLog.cy = cy;
-	}
-
-	// Initialize optimizer using SMPLModel instance
-	SMPLOptimizer fitter(&smplModel, &cameraModel, fitOpts);
-
-	if (debugLogEnabled)
-	{
-		std::cout << "[DEBUG] Debug logging is ENABLED for this run." << std::endl;
-	}
-
-	int frameIdx = 0;
-	cv::Mat frame;
-
-	while (loader.readFrame(frame))
-	{
-		auto tFrameStart = Clock::now();
-
-		frameIdx++;
-
-		// debug-frame handling
-		if (debugFrame.has_value())
-		{
-			if (frameIdx < *debugFrame)
-				continue;
-			if (frameIdx > *debugFrame)
-				break;
-		}
-
-		if (frameIdx > 300) break;
-
-		cv::Mat frameInput = frame.clone();
-
-		// OpenPose detection
-		auto tDetStart = Clock::now();
-		std::vector<Point2D> keypoints = poseDetector.detect(frame, frameIdx);
-		auto tDetEnd = Clock::now();
-
-		// Ceres Optimization
-		auto tOptStart = Clock::now();
-		fitter.fitFrame(keypoints);
-		auto tOptEnd = Clock::now();
-
-		// Mesh computation
-		auto tMeshStart = Clock::now();
-		SMPLMesh mesh = smplModel.computeMesh();
-		auto tMeshEnd = Clock::now();
-
-		// Draw results
-		auto tDrawStart = Clock::now();
-		cv::Mat outputFrame = frameInput.clone();
-		visualizer.drawKeypoints(outputFrame, keypoints);
-		visualizer.drawMesh(
-			outputFrame, mesh, cameraModel, fitter.getGlobalT(),
-			cv::Scalar(0, 255, 255, 1), 1
-		);
-		visualizer.write(outputFrame);
-
-		// std::string filename = "frame_" + std::to_string(frameIdx) + ".jpg";
-		// std::filesystem::path outputPath = outputFolder / filename;
-		// cv::imwrite(outputPath, outputFrame);
-
-		auto tDrawEnd = Clock::now();
-
-		auto tFrameEnd = Clock::now();
-
-		auto toMs = [](auto dt)
-		{
-			return std::chrono::duration_cast<
-				std::chrono::duration<double, std::milli>
-			>(dt).count();
-		};
-
-		double detectMs = toMs(tDetEnd - tDetStart);
-		double optMs = toMs(tOptEnd - tOptStart);
-		double meshMs = toMs(tMeshEnd - tMeshStart);
-		double drawMs = toMs(tDrawEnd - tDrawStart);
-		double totalMs = toMs(tFrameEnd - tFrameStart);
-
-		// Console output
-		std::cout << "Frame " << frameIdx << " | detect: " << detectMs << " ms"
-				  << " | opt: " << optMs << " ms"
-				  << " | mesh: " << meshMs << " ms"
-				  << " | draw: " << drawMs << " ms"
-				  << " | total: " << totalMs << " ms" << std::endl;
-
-		if (debugLogEnabled)
-		{
-			FrameDebugEntry entry;
-			entry.frame_index = frameIdx;
-			entry.num_keypoints = static_cast<int>(keypoints.size());
-			entry.keypoints_2d = keypoints;
-
-			entry.globalT = fitter.getGlobalT();
-			entry.pose_params = fitter.getPoseParams();
-			entry.shape_params = fitter.getShapeParams();
-
-			entry.timings.pose_detection_ms = detectMs;
-			entry.timings.fit_rigid_ms = 0.0;
-			entry.timings.fit_pose_ms = optMs;
-			entry.timings.compute_mesh_ms = meshMs;
-			entry.timings.draw_mesh_ms = drawMs;
-			entry.timings.total_frame_ms = totalMs;
-
-			// Optimization results
-			const ceres::Solver::Summary &initSummary = fitter.getInitSummary();
-			const ceres::Solver::Summary &fullSummary = fitter.getFullSummary();
-			entry.fit_rigid_final_cost = initSummary.final_cost;
-			entry.fit_rigid_iterations = initSummary.num_successful_steps;
-			entry.fit_pose_final_cost = fullSummary.final_cost;
-			entry.fit_pose_iterations = fullSummary.num_successful_steps;
-
-			debugLog.frames.push_back(std::move(entry));
-		}
-	}
-
-	if (debugLogEnabled)
-	{
-		std::filesystem::path logPath = outputFolder / "pipeline_debug.json";
-		json j = debugLog;
-
-		std::ofstream out(logPath);
-		if (out.is_open())
-		{
-			out << j.dump(2); // pretty-print
-			std::cout << "[DEBUG] Saved debug log to " << logPath << std::endl;
-		}
-		else
-		{
-			std::cerr << "[DEBUG] Failed to open debug log file at " << logPath
-					  << std::endl;
-		}
-	}
-
-	return 0;
+int main(int argc, char* argv[]) {
+    // Parse command line arguments
+    argparse::ArgumentParser program("pipeline");
+
+    program.add_argument("--video-path")
+        .help("Path to video file")
+        .required();
+
+    program.add_argument("--smpl-path")
+        .help("Path to SMPL model (.json)")
+        .required();
+
+    program.add_argument("--output")
+        .help("Output folder")
+        .default_value("./output");
+
+    program.add_argument("--precomputed-keypoints")
+        .help("Path to pre-computed keypoints (.json)");
+
+    program.add_argument("--frame")
+        .help("Process only this frame")
+        .scan<'i', int>();
+
+    program.add_argument("--debug")
+        .help("Save debug data as a JSON")
+        .default_value(false)
+        .implicit_value(true);
+    
+    program.add_argument("--skip-viz")
+        .help("Skip visualization")
+        .default_value(false)
+        .implicit_value(true);
+
+    try {
+        program.parse_args(argc, argv);
+    } catch (const std::runtime_error& err) {
+        std::cerr << err.what() << "\n" << program;
+        return 1;
+    }
+
+    std::string videoPath = program.get("--video-path");
+    std::string smplPath = program.get("--smpl-path");
+    fs::path outputFolder = program.get("--output");
+    bool debugMode = program.get<bool>("--debug");
+    bool skipViz = program.get<bool>("--skip-viz");
+
+    std::optional<std::string> precomputedKeypoints;
+    if (program.is_used("--precomputed-keypoints"))
+        precomputedKeypoints = program.get("--precomputed-keypoints");
+
+    std::optional<int> specificFrame;
+    if (program.is_used("--frame"))
+        specificFrame = program.get<int>("--frame");
+
+    // Create directories for output
+    fs::create_directory(outputFolder);
+    fs::create_directory(outputFolder / "meshes");
+
+    // Initialize video reader
+    VideoLoader loader(videoPath);
+
+    // Initialize OpenPose detector
+    PoseDetector poseDetector(precomputedKeypoints);
+
+    // Initialize visualizer
+    std::filesystem::path outputVideoPath = outputFolder / "output.mp4";
+    Visualization visualizer(loader.width(), loader.height(), loader.fps(), outputVideoPath);
+
+    // Initialize camera model
+    double fx = loader.width();
+    double fy = loader.width();
+    double cx = loader.width() / 2.0;
+    double cy = loader.height() / 2.0;
+    CameraModel camera(fx, fy, cx, cy);
+
+    // Initialize SMPL model
+    SMPLModel smplModel;
+    if (!smplModel.loadFromJson(smplPath)) {
+        std::cerr << "Failed to load SMPL model from " << smplPath << "\n";
+        return 1;
+    }
+
+    // Initializer optimizer
+    SMPLOptimizer::Options fitOpts;
+    fitOpts.temporalRegularization = true;
+    fitOpts.warmStarting = true;
+    fitOpts.freezeShapeParameters = false;
+    SMPLOptimizer optimizer(&smplModel, &camera, fitOpts);
+
+    DebugData debug;
+    
+    debug.config = {
+        {"video_path", videoPath},
+        {"smpl_path", smplPath},
+        {"output_folder", outputFolder.string()},
+        {"frame_width", loader.width()},
+        {"frame_height", loader.height()},
+        {"fps", loader.fps()},
+        {"camera", {{"fx", fx}, {"fy", fy}, {"cx", cx}, {"cy", cy}}},
+        {"optimizer", {
+            {"temporal_regularization", fitOpts.temporalRegularization},
+            {"warm_starting", fitOpts.warmStarting},
+            {"freeze_shape", fitOpts.freezeShapeParameters}
+        }}
+    };
+
+    int frameIdx = 0;
+    cv::Mat frame;
+
+    while (loader.readFrame(frame)) {
+        frameIdx++;
+
+        if (frameIdx > 300) break;
+
+        // Handle debug-frame mode
+        if (specificFrame) {
+            if (frameIdx < *specificFrame) continue;
+            if (frameIdx > *specificFrame) break;
+        }
+
+        auto tStart = Clock::now();
+
+        // Pose Detection
+        auto t0 = Clock::now();
+        auto keypoints = poseDetector.detect(frame, frameIdx);
+        double detectMs = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+
+        // Optimization
+        t0 = Clock::now();
+        optimizer.fitFrame(keypoints);
+        double optMs = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+
+        // Mesh Computation
+        t0 = Clock::now();
+        SMPLMesh mesh = smplModel.computeMesh();
+        double meshMs = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+
+        // Visualization
+        t0 = Clock::now();
+        if (!skipViz) {
+            cv::Mat outputFrame = frame.clone();
+            visualizer.drawKeypoints(outputFrame, keypoints);
+            visualizer.drawMesh(outputFrame, mesh, camera, optimizer.getGlobalT());
+            visualizer.write(outputFrame);
+        }
+        double drawMs = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+
+        double totalMs = std::chrono::duration<double, std::milli>(Clock::now() - tStart).count();
+
+        // Console output
+        std::cout << "Frame " << frameIdx
+                  << " | detect: " << detectMs << " ms"
+                  << " | opt: " << optMs << " ms"
+                  << " | mesh: " << meshMs << " ms"
+                  << " | draw: " << drawMs << " ms"
+                  << " | total: " << totalMs << " ms\n";
+
+        // Collect debug data
+        if (debugMode) {
+            json kps = json::array();
+            for (const auto& kp : keypoints) {
+                kps.push_back({{"x", kp.x}, {"y", kp.y}, {"score", kp.score}});
+            }
+
+            Eigen::Vector3d T = optimizer.getGlobalT();
+
+            // Save mesh
+            std::stringstream meshFilename;
+            meshFilename << "mesh_" << std::setw(5) << std::setfill('0') << frameIdx << ".obj";
+            std::filesystem::path meshPath = outputFolder / "meshes" / meshFilename.str();
+            mesh.save(meshPath);
+            
+            debug.frames.push_back({
+                {"frame", frameIdx},
+                {"keypoints", kps},
+                {"globalT", {T(0), T(1), T(2)}},
+                {"pose_params", optimizer.getPoseParams()},
+                {"shape_params", optimizer.getShapeParams()},
+                {"mesh_path", meshPath.string()},
+                {"timings", {
+                    {"detect_ms", detectMs},
+                    {"opt_ms", optMs},
+                    {"mesh_ms", meshMs},
+                    {"draw_ms", drawMs},
+                    {"total_ms", totalMs}
+                }},
+                {"optimization", {
+                    {"init_cost", optimizer.getInitSummary().final_cost},
+                    {"init_iterations", optimizer.getInitSummary().num_successful_steps},
+                    {"full_cost", optimizer.getFullSummary().final_cost},
+                    {"full_iterations", optimizer.getFullSummary().num_successful_steps}
+                }}
+            });
+        }
+    }
+
+    // Save debug data
+    if (debugMode) {
+        debug.save(outputFolder / "debug.json");
+    }
+
+    return 0;
 }

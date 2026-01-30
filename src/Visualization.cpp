@@ -5,9 +5,9 @@
 #include "Visualization.h"
 #include "PoseDetector.h"
 
-Visualization::Visualization(int width, int height, double fps)
+Visualization::Visualization(int width, int height, double fps, std::filesystem::path outputPath)
 {
-	writer.open("output.mp4", cv::VideoWriter::fourcc('a', 'v', 'c', '1'), fps,
+	writer.open(outputPath, cv::VideoWriter::fourcc('a', 'v', 'c', '1'), fps,
 				cv::Size(width, height), true);
 
 	if (!writer.isOpened())
@@ -128,9 +128,11 @@ void Visualization::drawJoints(cv::Mat &frame,
 
 void Visualization::drawMesh(cv::Mat &frame, const SMPLMesh &mesh,
 							 const CameraModel &camera,
-							 const Eigen::Vector3d &globalT,
-							 const cv::Scalar &color, int lineThickness)
+							 const Eigen::Vector3d &globalT)
 {
+	const cv::Scalar &color = cv::Scalar(0, 255, 255);
+	int lineThickness = 1;
+
 	const float fx = camera.intrinsics().fx;
 	const float fy = camera.intrinsics().fy;
 	const float cx = camera.intrinsics().cx;

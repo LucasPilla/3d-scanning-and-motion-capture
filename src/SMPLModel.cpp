@@ -9,7 +9,7 @@
 
 using nlohmann::json;
 
-bool SMPLMesh::save(const std::string &path) const
+bool SMPLMesh::save(const std::filesystem::path path) const
 {
 
 	std::ofstream outFile(path);

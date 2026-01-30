@@ -7,6 +7,7 @@
 #include <Eigen/Dense>
 #include <string>
 #include <vector>
+#include <filesystem>
 
 // A simple mesh container for SMPL output.
 struct SMPLMesh
@@ -18,7 +19,7 @@ struct SMPLMesh
 	std::vector<Eigen::Vector3i> faces;
 
 	// Saves the mesh to OBJ format
-	bool save(const std::string &path) const;
+	bool save(const std::filesystem::path path) const;
 };
 
 class SMPLModel
