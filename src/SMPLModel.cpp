@@ -178,19 +178,6 @@ bool SMPLModel::loadFromJson(const std::string &jsonPath)
 			}
 		}
 
-		// -------- openpose_joint_regressor (25, N) --------
-		const auto &openpose_jr = j.at("openpose_joint_regressor");
-		const int numOpenPoseJoints = static_cast<int>(openpose_jr.size());
-
-		openPoseJointRegressor_.resize(numOpenPoseJoints, numVertices);
-		for (int jIdx = 0; jIdx < numOpenPoseJoints; ++jIdx)
-		{
-			for (int v = 0; v < numVertices; ++v)
-			{
-				openPoseJointRegressor_(jIdx, v) = static_cast<double>(openpose_jr[jIdx][v]);
-			}
-		}
-
 		// -------- kinematic_tree (2, numJoints) --------
 		const auto &kt = j.at("kinematic_tree");
 		const int ktRows = static_cast<int>(kt.size()); // Expected: 2
@@ -223,6 +210,8 @@ bool SMPLModel::loadFromJson(const std::string &jsonPath)
 			}
 		}
 
+		// ---------- GMM data -----------
+
 		// Load gmm_means
 		const auto &gmm_means = j.at("gmm_means");
 		int n_gaussians = static_cast<int>(gmm_means.size());
@@ -247,7 +236,7 @@ bool SMPLModel::loadFromJson(const std::string &jsonPath)
 			// Calculate determinant for weights normalization later
 			det_factors[k] = std::sqrt(sigma.determinant());
 
-			// Calculate Precision Cholesky
+			// Precompute Precision Cholesky
 			gmmPrecChols_[k] = sigma.inverse().llt().matrixU();
 		}
 
@@ -261,6 +250,9 @@ bool SMPLModel::loadFromJson(const std::string &jsonPath)
 		double min_sqr_det = det_factors.minCoeff();
 		double const_term = std::pow(2 * M_PI, n_dims / 2.0);
 		gmmWeights_.array() /= (const_term * (det_factors.array() / min_sqr_det));
+
+		// Precompute GMM mean pose
+		gmmMeanPose_ = gmmMeans_.transpose() * gmmWeights_;
 
 		// // -------- capsule_v2lens --------
 		// if (j.contains("capsule_v2lens")) {
@@ -309,6 +301,28 @@ bool SMPLModel::loadFromJson(const std::string &jsonPath)
 		//       capsuleBetas2Rads_(i, k) =
 		//           static_cast<double>(capsule_betas2rads[i][k]);
 		// }
+
+		// ---------- Precompute for optimzation ----------
+
+		// Precompute J_mean
+		// Used in ReprojectionCost for computing joints
+		J_mean_ = jointRegressor_ * templateVertices_;
+
+		// Precompute J_dirs
+		// Used in ReprojectionCost for computing joints
+		J_dirs_.resize(10);
+		for (int i = 0; i < 10; ++i)
+		{
+			// Get vector coresponding to beta[i]
+			Eigen::VectorXd shape_vector = shapeBlendShapes_.col(i);
+
+			// Reshape (20670, 1) to (6890, 3)
+			Eigen::Map<const Eigen::Matrix<double, 6890, 3, Eigen::RowMajor>>
+				shape_vector_reshaped(shape_vector.data());
+
+			// Compute J_dirs
+			J_dirs_[i] = jointRegressor_ * shape_vector_reshaped;
+		}
 	}
 	catch (const std::exception &e)
 	{
@@ -369,9 +383,6 @@ SMPLMesh SMPLModel::computeMesh()
 		theta(i) = poseParams_(i);
 	}
 	auto poseResult = applyPose<double>(theta, J);
-
-	// Store posed joints for logging
-	lastJoints3D_ = poseResult.posedJoints;
 
 	// 3. Pose blend shapes (uses rotations from poseResult)
 	Eigen::VectorXd pose_map((numJoints - 1) * 9);

@@ -1,5 +1,4 @@
 // Visualization.cpp
-
 // Implements visualization utilities for drawing detected 
 // keypoints, 3D joints and 3D mesh over the input frame
 

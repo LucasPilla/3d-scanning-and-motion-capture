@@ -25,12 +25,6 @@ struct Point2D
     float score = 0.0;  
 };
 
-// Represents the 2D pose for a single person
-struct Pose2D
-{
-    std::vector<Point2D> keypoints;
-};
-
 /**
  * Defines where pose keypoints come from.
  * - OpenPoseLive: run OpenPose per frame (slow)
@@ -57,14 +51,14 @@ public:
      * @param frame     Current video frame (ignored in Precomputed mode)
      * @param frameIdx  Frame index (used to lookup keypoints)
      */
-    Pose2D detect(const cv::Mat& frame, int frameIdx);
+    std::vector<Point2D> detect(const cv::Mat& frame, int frameIdx);
 
 private:
     PoseSource source_;
 
     // Precomputed mode
     // frame index -> list of 2D joints (x,y)
-    std::unordered_map<int, Pose2D> cachedPoses_;
+    std::unordered_map<int, std::vector<Point2D>> cachedPoses_;
 
     // OpenPose live mode
     std::unique_ptr<op::Wrapper> openpose_;
