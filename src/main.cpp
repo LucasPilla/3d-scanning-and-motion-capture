@@ -331,6 +331,8 @@ int main(int argc, char *argv[])
 				break;
 		}
 
+		if (frameIdx > 300) break;
+
 		cv::Mat frameInput = frame.clone();
 
 		// OpenPose detection
@@ -358,9 +360,9 @@ int main(int argc, char *argv[])
 		);
 		visualizer.write(outputFrame);
 
-		std::string filename = "frame_" + std::to_string(frameIdx) + ".jpg";
-		std::filesystem::path outputPath = outputFolder / filename;
-		cv::imwrite(outputPath, outputFrame);
+		// std::string filename = "frame_" + std::to_string(frameIdx) + ".jpg";
+		// std::filesystem::path outputPath = outputFolder / filename;
+		// cv::imwrite(outputPath, outputFrame);
 
 		auto tDrawEnd = Clock::now();
 

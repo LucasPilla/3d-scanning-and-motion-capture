@@ -9,29 +9,34 @@
 #include <ceres/rotation.h>
 #include <unordered_map>
 
-// SMPL (24) -> OpenPose BODY_25 Mapping
-static const std::unordered_map<int, int> SMPL_TO_OPENPOSE = {
-	{0, 8},
-	{12, 1},
-	{1, 12},
-	{4, 13},
-	{7, 14},
-	{2, 9},
-	{5, 10},
-	{8, 11},
-	{16, 5},
-	{18, 6},
-	{20, 7},
-	{17, 2},
-	{19, 3},
-	{21, 4},
-	// The following keypoints are not exact but provide 
-	// constraints useful for estimating the right orientation.
-	{15, 0},  // Nose
-	{8, 24},  // Right Heel
-	{7, 21},  // Left Heel
-	{11, 22}, // Right Toes
-	{10, 19}  // Left Toes
+// OpenPose BODY_25 -> SMPL (24) Mapping
+// Maps each OpenPose joint index to the SMPL closest joint
+static const std::unordered_map<int, int> OPENPOSE_TO_SMPL = {
+	{0, 15},   // Nose -> Head
+	{1, 12},   // Neck -> Neck
+	{2, 17},   // RShoulder -> R_Shoulder
+	{3, 19},   // RElbow -> R_Elbow
+	{4, 21},   // RWrist -> R_Wrist
+	{5, 16},   // LShoulder -> L_Shoulder
+	{6, 18},   // LElbow -> L_Elbow
+	{7, 20},   // LWrist -> L_Wrist
+	{8, 0},    // MidHip -> Pelvis
+	{9, 2},    // RHip -> R_Hip
+	{10, 5},   // RKnee -> R_Knee
+	{11, 8},   // RAnkle -> R_Ankle
+	{12, 1},   // LHip -> L_Hip
+	{13, 4},   // LKnee -> L_Knee
+	{14, 7},   // LAnkle -> L_Ankle
+	{15, 15},  // REye -> Head
+	{16, 15},  // LEye -> Head
+	{17, 15},  // REar -> Head
+	{18, 15},  // LEar -> Head
+	{19, 10},  // LBigToe -> L_Foot
+	{20, 10},  // LSmallToe -> L_Foot
+	{21, 7},   // LHeel -> L_Ankle
+	{22, 11},  // RBigToe -> R_Foot
+	{23, 11},  // RSmallToe -> R_Foot
+	{24, 8}    // RHeel -> R_Ankle
 };
 
 // Cost Functor: Reprojection Error (Initialization).
@@ -90,7 +95,7 @@ struct InitReprojectionCost
 	float X_, Y_, Z_;
 
 	// 2D point detected by OpenPose
-	const Point2D &keypoint_;
+	const Point2D keypoint_;
 
 	// Camera model with intrinsic parameters for 3D->2D projection.
 	const CameraModel &cameraModel_;
@@ -114,17 +119,16 @@ struct InitDepthRegularizer
 };
 
 // Cost Functor: Reprojection Cost.
-// Minimizes the error between the projected SMPL joints and the observed 2D keypoints.
+// Minimizes the error between the projected OpenPose joints (computed via joint regressor)
+// and the observed 2D keypoints.
 struct ReprojectionCost
 {
 	ReprojectionCost(
-		const std::vector<std::pair<int, int>> &activeMapping, 
 		const std::vector<Point2D> &keypoints,
 		const CameraModel &cameraModel,
 		const SMPLModel &smplModel
 	)
-		: activeMapping_(activeMapping),
-		  keypoints_(keypoints),
+		: keypoints_(keypoints),
 		  cameraModel_(cameraModel),
 		  smplModel_(smplModel) {}
 
@@ -140,24 +144,40 @@ struct ReprojectionCost
 		Eigen::Map<const Eigen::Matrix<T, 72, 1>> poseParams(poseParamsPtr);
 		Eigen::Map<const Eigen::Matrix<T, 10, 1>> shapeParams(shapeParamsPtr);
 
-		// Apply shape and compute joints
+		// Compute SMPL rest joints (for forward kinematics)
 		Eigen::Matrix<T, 24, 3> J_rest = smplModel_.getJMean().cast<T>();
 		for (int i = 0; i < shapeParams.size(); ++i)
 		{
 			J_rest += smplModel_.getJDirs()[i].cast<T>() * shapeParams[i];
 		}
 
-		// Apply SMPL Forward Kinematics
+		// Compute OpenPose rest joints using joint regressor
+		Eigen::Matrix<T, 25, 3> J_openpose_rest = smplModel_.getOpenPoseJMean().cast<T>();
+		for (int i = 0; i < shapeParams.size(); ++i)
+		{
+			J_openpose_rest += smplModel_.getOpenPoseJDirs()[i].cast<T>() * shapeParams[i];
+		}
+
+		// Apply SMPL Forward Kinematics to get global transforms
 		auto poseResult = smplModel_.applyPose<T>(poseParams, J_rest);
 
-		for (int i = 0; i < activeMapping_.size(); ++i) 
+		for (int opIdx = 0; opIdx < keypoints_.size(); opIdx++)
 		{
-			int smplIdx = activeMapping_[i].first;
-            int opIdx = activeMapping_[i].second;
+			// Get SMPL index
+			int smplIdx = OPENPOSE_TO_SMPL.at(opIdx);
 
-			// Get specific joint position
+			// Get OpenPose joint rest position
+			Eigen::Matrix<T, 3, 1> opJointRest = J_openpose_rest.row(opIdx).transpose();
+
+			// Get SMPL joint rest position 
+			Eigen::Matrix<T, 3, 1> smplJointRest = J_rest.row(smplIdx).transpose();
+
+			// Compute offset from SMPL joint to OpenPose joint in rest pose
+			Eigen::Matrix<T, 3, 1> offset = opJointRest - smplJointRest;
+
+			// Apply SMPL joint's global transform to the OpenPose joint
 			Eigen::Matrix<T, 3, 1> jointPos =
-				poseResult.posedJoints.row(smplIdx).transpose();
+				poseResult.G_rot[smplIdx] * offset + poseResult.G_trans[smplIdx];
 
 			// Apply global translation
 			Eigen::Matrix<T, 3, 1> pCam = jointPos + globalT;
@@ -170,20 +190,17 @@ struct ReprojectionCost
 			const T v = T(K.fy) * pCam(1) * z_inv + T(K.cy);
 
 			// Residuals
-			const auto& kp = keypoints_[opIdx];
+			const auto &kp = keypoints_[opIdx];
 			const T conf = T(kp.score);
-			residuals[i * 2] = conf * (u - T(kp.x));
-			residuals[i * 2 + 1] = conf * (v - T(kp.y));
+			residuals[opIdx * 2] = conf * (u - T(kp.x));
+			residuals[opIdx * 2 + 1] = conf * (v - T(kp.y));
 		}
 
 		return true;
 	}
 
-	// Index of the specific SMPL joint being optimized in this block.
-	const std::vector<std::pair<int, int>> &activeMapping_;
-
-	// 2D point detected by OpenPose
-	const std::vector<Point2D> &keypoints_;
+	// 2D keypoints detected by OpenPose
+	const std::vector<Point2D> keypoints_;
 
 	// Camera model with intrinsic parameters for 3D->2D projection.
 	const CameraModel &cameraModel_;
@@ -308,29 +325,20 @@ struct JointLimitCost
 // L2 regularization penalizing deviations from the previous frame's pose parameters.
 struct TemporalCost
 {
-	TemporalCost(
-		double weight, 
-		const std::vector<double> &prevPoseParams,
-		const std::vector<double> &prevShapeParams
-	): weight_(weight), prevPoseParams_(prevPoseParams), prevShapeParams_(prevShapeParams) {}
+	TemporalCost(double weight, const std::vector<double> &prevValues)
+	: weight_(weight), prevValues_(prevValues) {}
 
 	template <typename T>
-	bool operator()(const T *const poseParams, const T *const shapeParams, T *residuals) const
+	bool operator()(const T *const currentValues, T *residuals) const 
 	{
-		// Pose residuals
-		for (int i = 0; i < 72; ++i)
-			residuals[i] = T(weight_) * (poseParams[i] - T(prevPoseParams_[i]));
-		// Shape residuals
-		for (int i = 0; i < 10; ++i)
-			residuals[i+72] = T(weight_) * (shapeParams[i] - T(prevShapeParams_[i]));
+		for (int i = 0; i < prevValues_.size(); ++i)
+			residuals[i] = T(weight_) * (currentValues[i] - T(prevValues_[i]));
+
 		return true;
 	}
 
 	double weight_;
 
-	// Pose parameters from previos frame
-	const std::vector<double> &prevPoseParams_;
-
-	// Shape parameters from previos frame
-	const std::vector<double> &prevShapeParams_;
+	// Values from previos frame
+	const std::vector<double> prevValues_;
 };

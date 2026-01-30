@@ -178,6 +178,27 @@ bool SMPLModel::loadFromJson(const std::string &jsonPath)
 			}
 		}
 
+		// -------- openpose_joint_regressor (25, N) --------
+		if (j.contains("openpose_joint_regressor"))
+		{
+			const auto &opJr = j.at("openpose_joint_regressor");
+			const int numOpJoints = static_cast<int>(opJr.size());
+			if (numOpJoints == 0 || static_cast<int>(opJr[0].size()) != numVertices)
+			{
+				std::cerr << "SMPLModel::loadFromJson - invalid openpose_joint_regressor shape\n";
+				return false;
+			}
+
+			openPoseJointRegressor_.resize(numOpJoints, numVertices);
+			for (int jIdx = 0; jIdx < numOpJoints; ++jIdx)
+			{
+				for (int v = 0; v < numVertices; ++v)
+				{
+					openPoseJointRegressor_(jIdx, v) = static_cast<double>(opJr[jIdx][v]);
+				}
+			}
+		}
+
 		// -------- kinematic_tree (2, numJoints) --------
 		const auto &kt = j.at("kinematic_tree");
 		const int ktRows = static_cast<int>(kt.size()); // Expected: 2
@@ -303,14 +324,15 @@ bool SMPLModel::loadFromJson(const std::string &jsonPath)
 		// }
 
 		// ---------- Precompute for optimzation ----------
+		// Used in ReprojectionCost for directly computing joints
 
-		// Precompute J_mean
-		// Used in ReprojectionCost for computing joints
+		// Precompute J_mean 
 		J_mean_ = jointRegressor_ * templateVertices_;
+		openposeJ_mean_ = openPoseJointRegressor_ * templateVertices_;
 
 		// Precompute J_dirs
-		// Used in ReprojectionCost for computing joints
 		J_dirs_.resize(10);
+		openposeJ_dirs_.resize(10);
 		for (int i = 0; i < 10; ++i)
 		{
 			// Get vector coresponding to beta[i]
@@ -322,6 +344,7 @@ bool SMPLModel::loadFromJson(const std::string &jsonPath)
 
 			// Compute J_dirs
 			J_dirs_[i] = jointRegressor_ * shape_vector_reshaped;
+			openposeJ_dirs_[i] = openPoseJointRegressor_ * shape_vector_reshaped;
 		}
 	}
 	catch (const std::exception &e)

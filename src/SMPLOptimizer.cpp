@@ -15,13 +15,13 @@
 SMPLOptimizer::SMPLOptimizer(
 	SMPLModel *smplModel,
 	CameraModel *cameraModel,
-	const Options &options)
-	: smplModel_(smplModel), cameraModel_(cameraModel), options_(options) {}
+	const Options &options) : smplModel_(smplModel), cameraModel_(cameraModel), options_(options) {}
 
 void SMPLOptimizer::fitFrame(const std::vector<Point2D> &keypoints)
 {
 	// If OpenPose returns no detections skip frame
-	if (keypoints.size() == 0) {
+	if (keypoints.size() == 0)
+	{
 		hasPreviousFrame_ = false;
 		return;
 	}
@@ -37,7 +37,7 @@ void SMPLOptimizer::fitFrame(const std::vector<Point2D> &keypoints)
 			poseParams_[i + 3] = gmmMeanPose(i);
 
 		// Initialize shape with zeros
-		shapeParams_.assign(72, 0.0);
+		shapeParams_.assign(10, 0.0);
 
 		// Run first step
 		fitInitialization(keypoints);
@@ -51,20 +51,20 @@ void SMPLOptimizer::fitFrame(const std::vector<Point2D> &keypoints)
 
 void SMPLOptimizer::fitInitialization(const std::vector<Point2D> &keypoints)
 {
-	// Get rest joints
-	Eigen::Map<Eigen::VectorXd> shapeParamsVector(
-		shapeParams_.data(),
-		shapeParams_.size());
-	auto shapeResult = smplModel_->applyShape<double>(shapeParamsVector);
-	Eigen::Matrix<double, 24, 3> smplJoints = shapeResult.restJoints;
+	// Compute OpenPose joints from regressor
+	Eigen::MatrixXd openposeJoints = smplModel_->getOpenPoseJMean();
+	for (int i = 0; i < 10; ++i)
+	{
+		openposeJoints += smplModel_->getOpenPoseJDirs()[i] * shapeParams_[i];
+	}
 
 	// Initialize depth
 	double init_tz = 2.50;
 
-	// Pairs:
-	// Right Shoulder (17) and Right Hip (2)
-	// Left Shoulder (16) and Left Hip (1)
-	std::vector<std::pair<int, int>> torsoPairs = {{17, 2}, {16, 1}};
+	// OpenPose torso pairs:
+	// Right Shoulder (2) and Right Hip (9)
+	// Left Shoulder (5) and Left Hip (12)
+	std::vector<std::pair<int, int>> torsoPairs = {{2, 9}, {5, 12}};
 
 	double totalDistance3D = 0.0;
 	double totalDistance2D = 0.0;
@@ -72,13 +72,8 @@ void SMPLOptimizer::fitInitialization(const std::vector<Point2D> &keypoints)
 
 	for (const auto &pair : torsoPairs)
 	{
-		// Keypoint indexes according to SMPL
-		int shoulderSmplIdx = pair.first;
-		int hipSmplIdx = pair.second;
-
-		// Keypoint indexes according to OpenPose
-		int shoulderOpIdx = SMPL_TO_OPENPOSE.at(shoulderSmplIdx);
-		int hipOpIdx = SMPL_TO_OPENPOSE.at(hipSmplIdx);
+		int shoulderOpIdx = pair.first;
+		int hipOpIdx = pair.second;
 
 		// Get OpenPose keypoints
 		const Point2D &shoulderKeypoint = keypoints[shoulderOpIdx];
@@ -88,9 +83,9 @@ void SMPLOptimizer::fitInitialization(const std::vector<Point2D> &keypoints)
 		if (shoulderKeypoint.score < 0.1 || hipKeypoint.score < 0.1)
 			continue;
 
-		// Calculate 3D Distance
+		// Calculate 3D Distance using regressed OpenPose joints
 		double distance3D =
-			(smplJoints.row(shoulderSmplIdx) - smplJoints.row(hipSmplIdx)).norm();
+			(openposeJoints.row(shoulderOpIdx) - openposeJoints.row(hipOpIdx)).norm();
 
 		// Calculate 2D Distance
 		double dx = shoulderKeypoint.x - hipKeypoint.x;
@@ -115,22 +110,27 @@ void SMPLOptimizer::fitInitialization(const std::vector<Point2D> &keypoints)
 	Eigen::Vector3d translation = {0.0, 0.0, init_tz};
 	Eigen::Vector3d rotation = {0.0, 0.0, 0.0};
 
-	// Torso keypoint indexes
-	std::vector<int> torsoIdxs = {17, 2, 16, 1};
+	// OpenPose torso joint indices: RShoulder (2), RHip (9), LShoulder (5), LHip (12)
+	std::vector<int> torsoOpIdxs = {2, 9, 5, 12};
 
-	for (int smplIdx : torsoIdxs)
+	// Use OpenPose MidHip (8) as root reference, which corresponds to SMPL pelvis
+	Eigen::Vector3d rootJoint = openposeJoints.row(8).transpose();
+
+	for (int opIdx : torsoOpIdxs)
 	{
-		int opIdx = SMPL_TO_OPENPOSE.at(smplIdx);
 		const Point2D &kp = keypoints[opIdx];
+
+		// Get OpenPose joint position from regressor
+		Eigen::Vector3d jointPos = openposeJoints.row(opIdx).transpose();
 
 		// Add reprojection cost
 		ceres::CostFunction *reprojectionCost =
 			new ceres::AutoDiffCostFunction<InitReprojectionCost, 2, 3, 3>(
 				new InitReprojectionCost(
-					// Current joint
-					smplJoints(smplIdx, 0), smplJoints(smplIdx, 1), smplJoints(smplIdx, 2),
-					// Root joint
-					smplJoints(0, 0), smplJoints(0, 1), smplJoints(0, 2),
+					// Current joint (from OpenPose regressor)
+					jointPos(0), jointPos(1), jointPos(2),
+					// Root joint (OpenPose MidHip)
+					rootJoint(0), rootJoint(1), rootJoint(2),
 					// 2D Keypoint
 					kp,
 					// Camera
@@ -163,14 +163,6 @@ void SMPLOptimizer::fitInitialization(const std::vector<Point2D> &keypoints)
 
 void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 {
-	std::vector<std::pair<int, int>> activeMapping;
-	for (const auto& pair : SMPL_TO_OPENPOSE) {
-		if (keypoints[pair.second].score >= 0.1)
-			activeMapping.push_back(pair);
-	}
-	if (activeMapping.size() < 15)
-		return;
-
 	Eigen::Vector3d bestTranslation;
 	std::vector<double> bestShape;
 	std::vector<double> bestPose;
@@ -216,19 +208,19 @@ void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 
 		double finalCost;
 
-		for (int stage = 0; stage < 4; stage++)
+		for (int stage = 3; stage < 4; stage++)
 		{
 			double poseWeight = weights[stage].first;
 			double shapeWeight = weights[stage].second;
-			double jointLimitsWeight = 0.317 * poseWeight;
+			double jointLimitsWeight = 3.17 * poseWeight;
 
 			ceres::Problem problem;
 
 			// Add reprojection cost
-			ceres::CostFunction* cost =
+			ceres::CostFunction *cost =
 				new ceres::AutoDiffCostFunction<ReprojectionCost, ceres::DYNAMIC, 3, 72, 10>(
-					new ReprojectionCost(activeMapping, keypoints, *cameraModel_, *smplModel_),
-					activeMapping.size() * 2 // Dynamic residual size
+					new ReprojectionCost(keypoints, *cameraModel_, *smplModel_),
+					keypoints.size() * 2 // Dynamic residual size
 				);
 
 			problem.AddResidualBlock(
@@ -269,29 +261,24 @@ void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 			// Add temporal regularizer
 			if (hasPreviousFrame_ && options_.temporalRegularization)
 			{
-				ceres::CostFunction *temporalCost =
-					new ceres::AutoDiffCostFunction<TemporalCost, 72+10, 72, 10>(
-						new TemporalCost(10.0, prevPoseParams_, prevShapeParams_));
+				// Add temporal regularizer for pose
+				ceres::CostFunction *poseTemporalCost =
+					new ceres::AutoDiffCostFunction<TemporalCost, 72, 72>(
+						new TemporalCost(50.0, prevPoseParams_));
 
-				problem.AddResidualBlock(
-					temporalCost,
-					nullptr,
-					currentPose.data(),
-					currentShape.data());
+				problem.AddResidualBlock(poseTemporalCost, nullptr, currentPose.data());
 
+				// Add temporal regularizer for shape
+				ceres::CostFunction *shapeTemporalCost =
+					new ceres::AutoDiffCostFunction<TemporalCost, 10, 10>(
+						new TemporalCost(100.0, prevShapeParams_));
+
+				problem.AddResidualBlock(shapeTemporalCost, nullptr, currentShape.data());
 			}
-
-			// Add depth regularizer
-			ceres::CostFunction *regularizerCost =
-				new ceres::AutoDiffCostFunction<InitDepthRegularizer, 1, 3>(
-					new InitDepthRegularizer(currentTranslation(2)));
-
-			problem.AddResidualBlock(regularizerCost, nullptr, currentTranslation.data());
-
 
 			// Solve
 			ceres::Solver::Options options;
-			options.max_num_iterations = 20;
+			options.max_num_iterations = 100;
 			options.linear_solver_type = ceres::DENSE_QR;
 			options.minimizer_progress_to_stdout = false;
 
