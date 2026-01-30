@@ -70,7 +70,7 @@ private:
 
   // Previous frame
   bool hasPreviousFrame_ = false;
-  Eigen::Vector3d prevGlobalT_;
+  std::vector<double> prevGlobalT_;
   std::vector<double> prevPoseParams_;
   std::vector<double> prevShapeParams_;
 

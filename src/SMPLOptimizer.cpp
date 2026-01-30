@@ -163,7 +163,7 @@ void SMPLOptimizer::fitInitialization(const std::vector<Point2D> &keypoints)
 
 void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 {
-	Eigen::Vector3d bestTranslation;
+	std::vector<double> bestTranslation;
 	std::vector<double> bestShape;
 	std::vector<double> bestPose;
 	double bestCost = std::numeric_limits<double>::max();
@@ -175,7 +175,7 @@ void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 			continue;
 
 		// Parameters to be optimized
-		Eigen::Vector3d currentTranslation = globalT_;
+		std::vector<double> currentTranslation = {globalT_(0), globalT_(1), globalT_(2)};
 		std::vector<double> currentShape = shapeParams_;
 		std::vector<double> currentPose = poseParams_;
 
@@ -264,7 +264,7 @@ void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 				// Add temporal regularizer for pose
 				ceres::CostFunction *poseTemporalCost =
 					new ceres::AutoDiffCostFunction<TemporalCost, 72, 72>(
-						new TemporalCost(50.0, prevPoseParams_));
+						new TemporalCost(100.0, prevPoseParams_));
 
 				problem.AddResidualBlock(poseTemporalCost, nullptr, currentPose.data());
 
@@ -274,6 +274,13 @@ void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 						new TemporalCost(100.0, prevShapeParams_));
 
 				problem.AddResidualBlock(shapeTemporalCost, nullptr, currentShape.data());
+
+				// Add temporal regularizer for translation
+				ceres::CostFunction *translationTemporalCost =
+					new ceres::AutoDiffCostFunction<TemporalCost, 3, 3>(
+						new TemporalCost(100.0, prevGlobalT_));
+
+				problem.AddResidualBlock(translationTemporalCost, nullptr, currentTranslation.data());
 			}
 
 			// Solve
@@ -297,7 +304,7 @@ void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 	}
 
 	// Update optimizer state
-	globalT_ = bestTranslation;
+	globalT_ = Eigen::Map<Eigen::Vector3d>(bestTranslation.data());
 	poseParams_ = bestPose;
 	shapeParams_ = bestShape;
 
@@ -306,7 +313,7 @@ void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 	smplModel_->setShape(shapeParams_);
 
 	// Save current pose for the next frame
-	prevGlobalT_ = globalT_;
+	prevGlobalT_ = bestTranslation;
 	prevPoseParams_ = bestPose;
 	prevShapeParams_ = bestShape;
 	hasPreviousFrame_ = true;
