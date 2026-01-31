@@ -10,33 +10,33 @@
 #include <unordered_map>
 
 // OpenPose BODY_25 -> SMPL (24) Mapping
-// Maps each OpenPose joint index to the SMPL closest joint
-static const std::unordered_map<int, int> OPENPOSE_TO_SMPL = {
-	{0, 15},   // Nose -> Head
-	{1, 12},   // Neck -> Neck
-	{2, 17},   // RShoulder -> R_Shoulder
-	{3, 19},   // RElbow -> R_Elbow
-	{4, 21},   // RWrist -> R_Wrist
-	{5, 16},   // LShoulder -> L_Shoulder
-	{6, 18},   // LElbow -> L_Elbow
-	{7, 20},   // LWrist -> L_Wrist
-	{8, 0},    // MidHip -> Pelvis
-	{9, 2},    // RHip -> R_Hip
-	{10, 5},   // RKnee -> R_Knee
-	{11, 8},   // RAnkle -> R_Ankle
-	{12, 1},   // LHip -> L_Hip
-	{13, 4},   // LKnee -> L_Knee
-	{14, 7},   // LAnkle -> L_Ankle
-	{15, 15},  // REye -> Head
-	{16, 15},  // LEye -> Head
-	{17, 15},  // REar -> Head
-	{18, 15},  // LEar -> Head
-	{19, 10},  // LBigToe -> L_Foot
-	{20, 10},  // LSmallToe -> L_Foot
-	{21, 7},   // LHeel -> L_Ankle
-	{22, 11},  // RBigToe -> R_Foot
-	{23, 11},  // RSmallToe -> R_Foot
-	{24, 8}    // RHeel -> R_Ankle
+// Index = OpenPose joint index, Value = SMPL closest joint
+static const std::vector<int> OPENPOSE_TO_SMPL = {
+	15, // 0  Nose -> Head
+	12, // 1  Neck -> Neck
+	17, // 2  RShoulder -> R_Shoulder
+	19, // 3  RElbow -> R_Elbow
+	21, // 4  RWrist -> R_Wrist
+	16, // 5  LShoulder -> L_Shoulder
+	18, // 6  LElbow -> L_Elbow
+	20, // 7  LWrist -> L_Wrist
+	0,  // 8  MidHip -> Pelvis
+	2,  // 9  RHip -> R_Hip
+	5,  // 10 RKnee -> R_Knee
+	8,  // 11 RAnkle -> R_Ankle
+	1,  // 12 LHip -> L_Hip
+	4,  // 13 LKnee -> L_Knee
+	7,  // 14 LAnkle -> L_Ankle
+	15, // 15 REye -> Head
+	15, // 16 LEye -> Head
+	15, // 17 REar -> Head
+	15, // 18 LEar -> Head
+	10, // 19 LBigToe -> L_Foot
+	10, // 20 LSmallToe -> L_Foot
+	7,  // 21 LHeel -> L_Ankle
+	11, // 22 RBigToe -> R_Foot
+	11, // 23 RSmallToe -> R_Foot
+	8   // 24 RHeel -> R_Ankle
 };
 
 // Cost Functor: Reprojection Error (Initialization).
@@ -81,9 +81,10 @@ struct InitReprojectionCost
 		const T v = T(K.fy) * (translatedPoint[1] * z_inv) + T(K.cy);
 
 		// Residual
-		const T weight = T(std::sqrt(keypoint_.score));
-		residuals[0] = weight * (u - T(keypoint_.x));
-		residuals[1] = weight * (v - T(keypoint_.y));
+		const T factor = T(1000.0 / cameraModel_.getFrameHeight());
+		const T confidence = T(keypoint_.score);
+		residuals[0] = factor * confidence * (u - T(keypoint_.x));
+		residuals[1] = factor * confidence * (v - T(keypoint_.y));
 
 		return true;
 	}
@@ -105,16 +106,18 @@ struct InitReprojectionCost
 // Penalizes deviation from an initial depth (Z) to prevent it to explode or vanish
 struct InitDepthRegularizer
 {
-	InitDepthRegularizer(double init_z) : init_z_(init_z) {}
+	InitDepthRegularizer(double weight, double init_z) 
+	: weight_(weight), init_z_(init_z) {}
 
 	template <typename T>
 	bool operator()(const T *const translation, T *residual) const
 	{
 		// Residual
-		residual[0] = 1e2 * (translation[2] - T(init_z_));
+		residual[0] = T(weight_) * (translation[2] - T(init_z_));
 		return true;
 	}
 
+	double weight_;
 	double init_z_;
 };
 
@@ -164,7 +167,7 @@ struct ReprojectionCost
 		for (int opIdx = 0; opIdx < keypoints_.size(); opIdx++)
 		{
 			// Get SMPL index
-			int smplIdx = OPENPOSE_TO_SMPL.at(opIdx);
+			int smplIdx = OPENPOSE_TO_SMPL[opIdx];
 
 			// Get OpenPose joint rest position
 			Eigen::Matrix<T, 3, 1> opJointRest = J_openpose_rest.row(opIdx).transpose();
@@ -189,12 +192,26 @@ struct ReprojectionCost
 			const T u = T(K.fx) * pCam(0) * z_inv + T(K.cx);
 			const T v = T(K.fy) * pCam(1) * z_inv + T(K.cy);
 
-			// Residuals
+			// Compute residuals
 			const auto &kp = keypoints_[opIdx];
-			const T conf = T(kp.score);
-			residuals[opIdx * 2] = conf * (u - T(kp.x));
-			residuals[opIdx * 2 + 1] = conf * (v - T(kp.y));
-		}
+            T err_x = u - T(kp.x);
+            T err_y = v - T(kp.y);
+
+			// Apply Geman-McClure Robustifier
+			T r2 = err_x * err_x + err_y * err_y;
+            T sigma = T(100.0);
+            T sigma2 = T(sigma * sigma);
+            T scale = ceres::sqrt(sigma2 / (sigma2 + r2 + T(1e-12)));
+
+			// Weight by keypoint confidence
+            T confidence = T(kp.score);
+
+			// Weight according to frame height
+			T factor = T(1000.0 / cameraModel_.getFrameHeight());
+
+            residuals[opIdx * 2] = factor * confidence * scale * err_x;
+            residuals[opIdx * 2 + 1] = factor * confidence * scale * err_y;
+        }
 
 		return true;
 	}
@@ -214,7 +231,7 @@ struct ReprojectionCost
 // based on a Gaussian Mixture Model.
 struct GMMPosePriorCost
 {
-	GMMPosePriorCost(double weight, const SMPLModel &smplModel)
+	GMMPosePriorCost(const double *weight, const SMPLModel &smplModel)
 		: weight_(weight), smplModel_(smplModel) {}
 
 	template <typename T>
@@ -228,9 +245,9 @@ struct GMMPosePriorCost
 		T min_energy = T(std::numeric_limits<double>::max());
 
 		// SMPL model data
-		const Eigen::MatrixXd gmmMeans = smplModel_.getGmmMeans();
-		const Eigen::MatrixXd gmmWeights = smplModel_.getGmmWeights();
-		const std::vector<Eigen::MatrixXd> gmmPrecChols = smplModel_.getGmmPrecChols();
+		const Eigen::MatrixXd &gmmMeans = smplModel_.getGmmMeans();
+		const Eigen::MatrixXd &gmmWeights = smplModel_.getGmmWeights();
+		const std::vector<Eigen::MatrixXd> &gmmPrecChols = smplModel_.getGmmPrecChols();
 
 		int n_gaussians = gmmMeans.rows();
 		int n_dims = gmmMeans.cols();
@@ -262,19 +279,22 @@ struct GMMPosePriorCost
 
 		// Scaled Geometric Error
 		const T scale = T(std::sqrt(0.5));
+		const T weight = T(*weight_);
 		for (int i = 0; i < 69; ++i)
 		{
-			residuals[i] = T(weight_) * scale * best_projected_diff(i);
+			residuals[i] = weight * scale * best_projected_diff(i);
 		}
 
 		// Constant statistical error
 		// This ensures the optimizer fights to stay in high-probability clusters
-		residuals[69] = T(weight_) * T(std::sqrt(-std::log(gmmWeights(best_gaussian))));
+		residuals[69] = weight * T(std::sqrt(-std::log(gmmWeights(best_gaussian))));
 
 		return true;
 	}
 
-	double weight_;
+	// Reference to weight variable so this weight
+	// can be updated without recreating the residual block.
+	const double *weight_;
 
 	// SMPL instance.
 	const SMPLModel &smplModel_;
@@ -284,61 +304,96 @@ struct GMMPosePriorCost
 // L2 Regularization for shape parameters (betas) to prevent extreme body deformations.
 struct ShapePriorCost
 {
-	ShapePriorCost(double weight)
+	ShapePriorCost(const double *weight)
 		: weight_(weight) {}
 
 	template <typename T>
 	bool operator()(const T *const shape, T *residuals) const
 	{
+		T weight = T(*weight_);
 		for (int i = 0; i < 10; ++i)
-		{
-			residuals[i] = T(weight_) * shape[i];
-		}
+			residuals[i] = weight * shape[i];
 		return true;
 	}
 
-	double weight_;
+	// Reference to weight variable so this weight
+	// can be updated without recreating the residual block.
+	const double *weight_;
 };
 
 // Cost Functor: Joint Limits.
 // Penalize anatomically invalid rotations for elbows and knees.
 struct JointLimitCost
 {
-	JointLimitCost(double weight)
+	JointLimitCost(const double *weight)
 		: weight_(weight) {}
 
 	template <typename T>
 	bool operator()(const T *const poseParams, T *residuals) const
 	{
 		// Left Elbow (55), Right Elbow (58), Left Knee (12), Right Knee (15)
-		residuals[0] = T(weight_) * ceres::pow(ceres::exp(-poseParams[55]), T(2));
-		residuals[1] = T(weight_) * ceres::pow(ceres::exp(-poseParams[58]), T(2));
-		residuals[2] = T(weight_) * ceres::pow(ceres::exp(-poseParams[12]), T(2));
-		residuals[3] = T(weight_) * ceres::pow(ceres::exp(-poseParams[15]), T(2));
+		T weight = T(*weight_);
+		residuals[0] = weight * ceres::pow(ceres::exp(poseParams[55]), T(2));
+		residuals[1] = weight * ceres::pow(ceres::exp(-poseParams[58]), T(2));
+		residuals[2] = weight * ceres::pow(ceres::exp(-poseParams[12]), T(2));
+		residuals[3] = weight * ceres::pow(ceres::exp(-poseParams[15]), T(2));
 		return true;
 	}
 
-	double weight_;
+	// Reference to weight variable so this weight
+	// can be updated without recreating the residual block.
+	const double *weight_;
 };
 
 // Cost Functor: Temporal Cost.
 // L2 regularization penalizing deviations from the previous frame's pose parameters.
 struct TemporalCost
 {
-	TemporalCost(double weight, const std::vector<double> &prevValues)
+	TemporalCost(const double *weight, const std::vector<double> &prevValues)
 	: weight_(weight), prevValues_(prevValues) {}
 
 	template <typename T>
 	bool operator()(const T *const currentValues, T *residuals) const 
 	{
+		T weight = T(*weight_);
 		for (int i = 0; i < prevValues_.size(); ++i)
-			residuals[i] = T(weight_) * (currentValues[i] - T(prevValues_[i]));
-
+			residuals[i] = weight * (currentValues[i] - T(prevValues_[i]));
 		return true;
 	}
 
-	double weight_;
+	// Reference to weight variable so this weight
+	// can be updated without recreating the residual block.
+	const double *weight_;
 
 	// Values from previos frame
 	const std::vector<double> prevValues_;
+};
+
+// Cost Functor: Acceleration Prior (2nd Order)
+// Penalizes (Current - 2*Prev + PrevPrev)
+struct AccelerationCost
+{
+    AccelerationCost(const double* weight, const std::vector<double>& prev1, const std::vector<double>& prev2)
+        : weight_(weight), prev1_(prev1), prev2_(prev2) {}
+
+    template <typename T>
+    bool operator()(const T* const current, T* residuals) const
+    {
+        T w = T(*weight_);
+        for (size_t i = 0; i < prev1_.size(); ++i)
+        {
+            // Acceleration = x_t - 2*x_{t-1} + x_{t-2}
+            // If the motion is linear (constant velocity), this is 0.
+            T val_t   = current[i];
+            T val_t_1 = T(prev1_[i]);
+            T val_t_2 = T(prev2_[i]);
+
+            residuals[i] = w * (val_t - T(2.0) * val_t_1 + val_t_2);
+        }
+        return true;
+    }
+
+    const double* weight_;
+    const std::vector<double> prev1_; // Frame t-1
+    const std::vector<double> prev2_; // Frame t-2
 };

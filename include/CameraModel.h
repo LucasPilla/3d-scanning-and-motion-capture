@@ -15,12 +15,14 @@ class CameraModel
 public:
     CameraModel() = default;
 
-    CameraModel(float fx, float fy, float cx, float cy)
+    CameraModel(double frameWidth, double frameHeight)
     {
-        K_.fx = fx;
-        K_.fy = fy;
-        K_.cx = cx;
-        K_.cy = cy;
+        K_.fx = frameWidth;
+        K_.fy = frameWidth;
+        K_.cx = frameWidth / 2.0;
+        K_.cy = frameHeight / 2.0;
+        frameWidth_ = frameWidth;
+        frameHeight_ = frameHeight;
     }
 
     explicit CameraModel(const CameraIntrinsics& intrinsics)
@@ -28,21 +30,11 @@ public:
     {}
 
     const CameraIntrinsics& intrinsics() const { return K_; }
-    CameraIntrinsics& intrinsics() { return K_; }
-
-    // Pinhole projection: 3D point in camera coordinates -> 2D pixel
-    // Assumes pointCam.z() > 0.
-    Eigen::Vector2d project(const Eigen::Vector3d& pointCam) const
-    {
-        double xNorm = pointCam.x() / pointCam.z();
-        double yNorm = pointCam.y() / pointCam.z();
-
-        double u = K_.fx * xNorm + K_.cx;
-        double v = K_.fy * yNorm + K_.cy;
-
-        return Eigen::Vector2d(u, v);
-    }
+    double getFrameWidth() const { return frameWidth_; }
+    double getFrameHeight() const { return frameHeight_; }
 
 private:
     CameraIntrinsics K_{};
+    double frameWidth_;
+    double frameHeight_;
 };

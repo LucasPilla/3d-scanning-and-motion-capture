@@ -51,7 +51,7 @@ void SMPLOptimizer::fitFrame(const std::vector<Point2D> &keypoints)
 
 void SMPLOptimizer::fitInitialization(const std::vector<Point2D> &keypoints)
 {
-	// Compute OpenPose joints from regressor
+	// Compute OpenPose joints in mean pose
 	Eigen::MatrixXd openposeJoints = smplModel_->getOpenPoseJMean();
 	for (int i = 0; i < 10; ++i)
 	{
@@ -59,7 +59,7 @@ void SMPLOptimizer::fitInitialization(const std::vector<Point2D> &keypoints)
 	}
 
 	// Initialize depth
-	double init_tz = 2.50;
+	double init_tz = 2.5;
 
 	// OpenPose torso pairs:
 	// Right Shoulder (2) and Right Hip (9)
@@ -143,7 +143,7 @@ void SMPLOptimizer::fitInitialization(const std::vector<Point2D> &keypoints)
 	// Add depth regularizer
 	ceres::CostFunction *regularizerCost =
 		new ceres::AutoDiffCostFunction<InitDepthRegularizer, 1, 3>(
-			new InitDepthRegularizer(init_tz));
+			new InitDepthRegularizer(100.0, init_tz));
 
 	problem.AddResidualBlock(regularizerCost, nullptr, translation.data());
 
@@ -199,95 +199,119 @@ void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 			currentPose[2] = r_parameters[2];
 		}
 
-		// Official SMPLify weights schedule
+		ceres::Problem problem;
+		ceres::Solver::Options options;
+		options.max_num_iterations = 100;
+		options.linear_solver_type = ceres::DENSE_QR;
+		options.minimizer_progress_to_stdout = false;
+
+		// Weight variables
+		double w_pose = 0.0;
+        double w_shape = 0.0;
+        double w_limits = 0.0;
+		double w_temp_pose = 0.0;
+		double w_temp_shape = 0.0;
+		double w_temp_trans = 0.0;
+
+		// Add reprojection cost
+		ceres::CostFunction *cost =
+			new ceres::AutoDiffCostFunction<ReprojectionCost, ceres::DYNAMIC, 3, 72, 10>(
+				new ReprojectionCost(keypoints, *cameraModel_, *smplModel_),
+				keypoints.size() * 2 // Dynamic residual size
+			);
+
+		problem.AddResidualBlock(
+			cost,
+			nullptr,
+			currentTranslation.data(),
+			currentPose.data(),
+			currentShape.data());
+
+		// Add GMM prior cost
+		ceres::CostFunction *gmmPosePriorCost =
+			new ceres::AutoDiffCostFunction<GMMPosePriorCost, 70, 72>(
+				new GMMPosePriorCost(&w_pose, *smplModel_));
+
+		problem.AddResidualBlock(
+			gmmPosePriorCost, nullptr,
+			currentPose.data());
+
+		// Add shape prior cost
+		ceres::CostFunction *shapePriorCost =
+			new ceres::AutoDiffCostFunction<ShapePriorCost, 10, 10>(
+				new ShapePriorCost(&w_shape));
+
+		problem.AddResidualBlock(
+			shapePriorCost, nullptr,
+			currentShape.data());
+
+		// Add joint limits cost
+		ceres::CostFunction *jointLimitCost =
+			new ceres::AutoDiffCostFunction<JointLimitCost, 4, 72>(
+				new JointLimitCost(&w_limits));
+
+		problem.AddResidualBlock(
+			jointLimitCost,
+			nullptr,
+			currentPose.data());
+
+		// Add temporal regularizer
+		if (hasPreviousFrame_ && options_.temporalRegularization)
+		{
+			// Add temporal regularizer for pose
+			ceres::CostFunction *poseTemporalCost =
+				new ceres::AutoDiffCostFunction<TemporalCost, 72, 72>(
+					new TemporalCost(&w_temp_pose, prevPoseParams_));
+
+			problem.AddResidualBlock(poseTemporalCost, nullptr, currentPose.data());
+
+			// Add temporal regularizer for shape
+			ceres::CostFunction *shapeTemporalCost =
+				new ceres::AutoDiffCostFunction<TemporalCost, 10, 10>(
+					new TemporalCost(&w_temp_shape, prevShapeParams_));
+
+			problem.AddResidualBlock(shapeTemporalCost, nullptr, currentShape.data());
+
+			// Add temporal regularizer for translation
+			ceres::CostFunction *translationTemporalCost =
+				new ceres::AutoDiffCostFunction<TemporalCost, 3, 3>(
+					new TemporalCost(&w_temp_trans, prevGlobalT_));
+
+			problem.AddResidualBlock(translationTemporalCost, nullptr, currentTranslation.data());
+		}
+
+		// SMPLify-x weights schedule
+		// Pose Prior / Shape Prior 
 		std::vector<std::pair<double, double>> weights = {
-			{4.04 * 1e2, 1e2},
-			{4.04 * 1e2, 5 * 1e1},
-			{57.4, 1e1},
-			{4.78, 0.5 * 1e1}};
+			{404.0, 100.0},
+			{404.0, 50.0},
+			{57.4, 10.0},
+			{4.78, 5.0}
+		};
 
 		double finalCost;
 
-		for (int stage = 3; stage < 4; stage++)
+		// Staged optimization
+		for (int stage = 0; stage < 4; stage++)
 		{
-			double poseWeight = weights[stage].first;
-			double shapeWeight = weights[stage].second;
-			double jointLimitsWeight = 3.17 * poseWeight;
+			// Update weights
+			// We add the residual blocks to the ceres problem once with a reference
+			// to the weight's variable, so just updating these variables is enough.
+			w_pose = weights[stage].first;
+			w_shape = weights[stage].second;
+			w_limits = 3.17 * w_pose;
+			w_temp_pose = 20.0;
+			w_temp_shape = 500.0;
+			w_temp_trans = 100.0;
 
-			ceres::Problem problem;
-
-			// Add reprojection cost
-			ceres::CostFunction *cost =
-				new ceres::AutoDiffCostFunction<ReprojectionCost, ceres::DYNAMIC, 3, 72, 10>(
-					new ReprojectionCost(keypoints, *cameraModel_, *smplModel_),
-					keypoints.size() * 2 // Dynamic residual size
-				);
-
-			problem.AddResidualBlock(
-				cost,
-				nullptr,
-				currentTranslation.data(),
-				currentPose.data(),
-				currentShape.data());
-
-			// Add GMM prior cost
-			ceres::CostFunction *gmmPosePriorCost =
-				new ceres::AutoDiffCostFunction<GMMPosePriorCost, 70, 72>(
-					new GMMPosePriorCost(poseWeight, *smplModel_));
-
-			problem.AddResidualBlock(
-				gmmPosePriorCost, nullptr,
-				currentPose.data());
-
-			// Add shape prior cost
-			ceres::CostFunction *shapePriorCost =
-				new ceres::AutoDiffCostFunction<ShapePriorCost, 10, 10>(
-					new ShapePriorCost(shapeWeight));
-
-			problem.AddResidualBlock(
-				shapePriorCost, nullptr,
-				currentShape.data());
-
-			// Add joint limits cost
-			ceres::CostFunction *jointLimitCost =
-				new ceres::AutoDiffCostFunction<JointLimitCost, 4, 72>(
-					new JointLimitCost(jointLimitsWeight));
-
-			problem.AddResidualBlock(
-				jointLimitCost,
-				nullptr,
-				currentPose.data());
-
-			// Add temporal regularizer
-			if (hasPreviousFrame_ && options_.temporalRegularization)
-			{
-				// Add temporal regularizer for pose
-				ceres::CostFunction *poseTemporalCost =
-					new ceres::AutoDiffCostFunction<TemporalCost, 72, 72>(
-						new TemporalCost(100.0, prevPoseParams_));
-
-				problem.AddResidualBlock(poseTemporalCost, nullptr, currentPose.data());
-
-				// Add temporal regularizer for shape
-				ceres::CostFunction *shapeTemporalCost =
-					new ceres::AutoDiffCostFunction<TemporalCost, 10, 10>(
-						new TemporalCost(100.0, prevShapeParams_));
-
-				problem.AddResidualBlock(shapeTemporalCost, nullptr, currentShape.data());
-
-				// Add temporal regularizer for translation
-				ceres::CostFunction *translationTemporalCost =
-					new ceres::AutoDiffCostFunction<TemporalCost, 3, 3>(
-						new TemporalCost(100.0, prevGlobalT_));
-
-				problem.AddResidualBlock(translationTemporalCost, nullptr, currentTranslation.data());
-			}
-
-			// Solve
-			ceres::Solver::Options options;
-			options.max_num_iterations = 100;
-			options.linear_solver_type = ceres::DENSE_QR;
-			options.minimizer_progress_to_stdout = false;
+			// // FIX: Lock Translation in Stage 0
+			// // We trust the "Camera Init" step more than the "Stiff Body" step.
+			// if (stage == 0) {
+			// 	problem.SetParameterBlockConstant(currentTranslation.data());
+			// } 
+			// else {
+			// 	problem.SetParameterBlockVariable(currentTranslation.data());
+			// }
 
 			ceres::Solve(options, &problem, &fullSummary_);
 

@@ -179,23 +179,20 @@ bool SMPLModel::loadFromJson(const std::string &jsonPath)
 		}
 
 		// -------- openpose_joint_regressor (25, N) --------
-		if (j.contains("openpose_joint_regressor"))
+		const auto &opJr = j.at("openpose_joint_regressor");
+		const int numOpJoints = static_cast<int>(opJr.size());
+		if (numOpJoints == 0 || static_cast<int>(opJr[0].size()) != numVertices)
 		{
-			const auto &opJr = j.at("openpose_joint_regressor");
-			const int numOpJoints = static_cast<int>(opJr.size());
-			if (numOpJoints == 0 || static_cast<int>(opJr[0].size()) != numVertices)
-			{
-				std::cerr << "SMPLModel::loadFromJson - invalid openpose_joint_regressor shape\n";
-				return false;
-			}
+			std::cerr << "SMPLModel::loadFromJson - invalid openpose_joint_regressor shape\n";
+			return false;
+		}
 
-			openPoseJointRegressor_.resize(numOpJoints, numVertices);
-			for (int jIdx = 0; jIdx < numOpJoints; ++jIdx)
+		openPoseJointRegressor_.resize(numOpJoints, numVertices);
+		for (int jIdx = 0; jIdx < numOpJoints; ++jIdx)
+		{
+			for (int v = 0; v < numVertices; ++v)
 			{
-				for (int v = 0; v < numVertices; ++v)
-				{
-					openPoseJointRegressor_(jIdx, v) = static_cast<double>(opJr[jIdx][v]);
-				}
+				openPoseJointRegressor_(jIdx, v) = static_cast<double>(opJr[jIdx][v]);
 			}
 		}
 

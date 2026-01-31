@@ -111,11 +111,7 @@ int main(int argc, char* argv[]) {
     Visualization visualizer(loader.width(), loader.height(), loader.fps(), outputVideoPath);
 
     // Initialize camera model
-    double fx = loader.width();
-    double fy = loader.width();
-    double cx = loader.width() / 2.0;
-    double cy = loader.height() / 2.0;
-    CameraModel camera(fx, fy, cx, cy);
+    CameraModel camera(loader.width(), loader.height());
 
     // Initialize SMPL model
     SMPLModel smplModel;
@@ -140,7 +136,12 @@ int main(int argc, char* argv[]) {
         {"frame_width", loader.width()},
         {"frame_height", loader.height()},
         {"fps", loader.fps()},
-        {"camera", {{"fx", fx}, {"fy", fy}, {"cx", cx}, {"cy", cy}}},
+        {"camera", {
+            {"fx", camera.intrinsics().fx}, 
+            {"fy", camera.intrinsics().fy}, 
+            {"cx", camera.intrinsics().cx}, 
+            {"cy", camera.intrinsics().cy}
+        }},
         {"optimizer", {
             {"temporal_regularization", fitOpts.temporalRegularization},
             {"warm_starting", fitOpts.warmStarting},
@@ -154,7 +155,7 @@ int main(int argc, char* argv[]) {
     while (loader.readFrame(frame)) {
         frameIdx++;
 
-        if (frameIdx > 300) break;
+        if (frameIdx > 1200) break;
 
         // Handle debug-frame mode
         if (specificFrame) {
