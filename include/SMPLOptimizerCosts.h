@@ -7,7 +7,6 @@
 #include "PoseDetector.h"
 #include <ceres/ceres.h>
 #include <ceres/rotation.h>
-#include <unordered_map>
 
 // OpenPose BODY_25 -> SMPL (24) Mapping
 // Index = OpenPose joint index, Value = SMPL closest joint
@@ -129,11 +128,15 @@ struct ReprojectionCost
 	ReprojectionCost(
 		const std::vector<Point2D> &keypoints,
 		const CameraModel &cameraModel,
-		const SMPLModel &smplModel
+		const SMPLModel &smplModel,
+		const double *temporalWeight,
+		const Eigen::Matrix<double, 24, 3> *prevJoints
 	)
 		: keypoints_(keypoints),
 		  cameraModel_(cameraModel),
-		  smplModel_(smplModel) {}
+		  smplModel_(smplModel),
+		  temporalWeight_(temporalWeight),
+		  prevJoints_(prevJoints) {}
 
 	template <typename T>
 	bool operator()(
@@ -147,22 +150,14 @@ struct ReprojectionCost
 		Eigen::Map<const Eigen::Matrix<T, 72, 1>> poseParams(poseParamsPtr);
 		Eigen::Map<const Eigen::Matrix<T, 10, 1>> shapeParams(shapeParamsPtr);
 
-		// Compute SMPL rest joints (for forward kinematics)
-		Eigen::Matrix<T, 24, 3> J_rest = smplModel_.getJMean().cast<T>();
-		for (int i = 0; i < shapeParams.size(); ++i)
-		{
-			J_rest += smplModel_.getJDirs()[i].cast<T>() * shapeParams[i];
-		}
+		// Compute SMPL rest joints 
+		Eigen::Matrix<T, 24, 3> J_rest = smplModel_.regressSmplRestJoints<T>(shapeParams);
 
 		// Compute OpenPose rest joints using joint regressor
-		Eigen::Matrix<T, 25, 3> J_openpose_rest = smplModel_.getOpenPoseJMean().cast<T>();
-		for (int i = 0; i < shapeParams.size(); ++i)
-		{
-			J_openpose_rest += smplModel_.getOpenPoseJDirs()[i].cast<T>() * shapeParams[i];
-		}
+		Eigen::Matrix<T, 25, 3> J_openpose_rest = smplModel_.regressOpenposeRestJoints<T>(shapeParams);
 
-		// Apply SMPL Forward Kinematics to get global transforms
-		auto poseResult = smplModel_.applyPose<T>(poseParams, J_rest);
+		// Compute global transforms for joints
+		auto jointTransforms = smplModel_.computeWorldTransforms<T>(poseParams, J_rest);
 
 		for (int opIdx = 0; opIdx < keypoints_.size(); opIdx++)
 		{
@@ -180,7 +175,7 @@ struct ReprojectionCost
 
 			// Apply SMPL joint's global transform to the OpenPose joint
 			Eigen::Matrix<T, 3, 1> jointPos =
-				poseResult.G_rot[smplIdx] * offset + poseResult.G_trans[smplIdx];
+				jointTransforms.G_rot[smplIdx] * offset + jointTransforms.G_trans[smplIdx];
 
 			// Apply global translation
 			Eigen::Matrix<T, 3, 1> pCam = jointPos + globalT;
@@ -213,6 +208,21 @@ struct ReprojectionCost
             residuals[opIdx * 2 + 1] = factor * confidence * scale * err_y;
         }
 
+		// Add temporal residuals
+		// We keep this within ReprojectionCost to avoid recomputing joints in
+		// another residual block.
+		if (prevJoints_) {
+            int offset = keypoints_.size() * 2;
+            T weight = T(*temporalWeight_);
+            for (int i = 0; i < 24; ++i) {
+                Eigen::Matrix<T, 3, 1> currentJ3D = jointTransforms.G_trans[i] + globalT;
+                Eigen::Matrix<T, 3, 1> targetJ3D = prevJoints_->row(i).cast<T>();
+                residuals[offset + i*3 + 0] = weight * (currentJ3D.x() - targetJ3D.x());
+                residuals[offset + i*3 + 1] = weight * (currentJ3D.y() - targetJ3D.y());
+                residuals[offset + i*3 + 2] = weight * (currentJ3D.z() - targetJ3D.z());
+            }
+        }
+
 		return true;
 	}
 
@@ -224,6 +234,12 @@ struct ReprojectionCost
 
 	// SMPL instance.
 	const SMPLModel &smplModel_;
+
+	// Weight for temporal residuals
+	const double *temporalWeight_;
+
+	// Previous joints for temporal residuals
+	const Eigen::Matrix<double, 24, 3> *prevJoints_;
 };
 
 // Cost Functor: GMM Pose Prior.
@@ -343,57 +359,4 @@ struct JointLimitCost
 	// Reference to weight variable so this weight
 	// can be updated without recreating the residual block.
 	const double *weight_;
-};
-
-// Cost Functor: Temporal Cost.
-// L2 regularization penalizing deviations from the previous frame's pose parameters.
-struct TemporalCost
-{
-	TemporalCost(const double *weight, const std::vector<double> &prevValues)
-	: weight_(weight), prevValues_(prevValues) {}
-
-	template <typename T>
-	bool operator()(const T *const currentValues, T *residuals) const 
-	{
-		T weight = T(*weight_);
-		for (int i = 0; i < prevValues_.size(); ++i)
-			residuals[i] = weight * (currentValues[i] - T(prevValues_[i]));
-		return true;
-	}
-
-	// Reference to weight variable so this weight
-	// can be updated without recreating the residual block.
-	const double *weight_;
-
-	// Values from previos frame
-	const std::vector<double> prevValues_;
-};
-
-// Cost Functor: Acceleration Prior (2nd Order)
-// Penalizes (Current - 2*Prev + PrevPrev)
-struct AccelerationCost
-{
-    AccelerationCost(const double* weight, const std::vector<double>& prev1, const std::vector<double>& prev2)
-        : weight_(weight), prev1_(prev1), prev2_(prev2) {}
-
-    template <typename T>
-    bool operator()(const T* const current, T* residuals) const
-    {
-        T w = T(*weight_);
-        for (size_t i = 0; i < prev1_.size(); ++i)
-        {
-            // Acceleration = x_t - 2*x_{t-1} + x_{t-2}
-            // If the motion is linear (constant velocity), this is 0.
-            T val_t   = current[i];
-            T val_t_1 = T(prev1_[i]);
-            T val_t_2 = T(prev2_[i]);
-
-            residuals[i] = w * (val_t - T(2.0) * val_t_1 + val_t_2);
-        }
-        return true;
-    }
-
-    const double* weight_;
-    const std::vector<double> prev1_; // Frame t-1
-    const std::vector<double> prev2_; // Frame t-2
 };

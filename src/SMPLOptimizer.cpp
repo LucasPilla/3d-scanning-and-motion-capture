@@ -7,8 +7,6 @@
 #include "CameraModel.h"
 #include "SMPLModel.h"
 #include <ceres/ceres.h>
-#include <ceres/rotation.h>
-#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -31,13 +29,13 @@ void SMPLOptimizer::fitFrame(const std::vector<Point2D> &keypoints)
 	if (!options_.warmStarting || !hasPreviousFrame_)
 	{
 		// Initialize pose with GMM mean
-		poseParams_.assign(72, 0.0);
+		poseParams_ = Eigen::VectorXd::Zero(72);
 		Eigen::VectorXd gmmMeanPose = smplModel_->getGmmMeanPose();
 		for (int i = 0; i < 69; ++i)
 			poseParams_[i + 3] = gmmMeanPose(i);
 
 		// Initialize shape with zeros
-		shapeParams_.assign(10, 0.0);
+		shapeParams_ = Eigen::VectorXd::Zero(10);
 
 		// Run first step
 		fitInitialization(keypoints);
@@ -52,14 +50,11 @@ void SMPLOptimizer::fitFrame(const std::vector<Point2D> &keypoints)
 void SMPLOptimizer::fitInitialization(const std::vector<Point2D> &keypoints)
 {
 	// Compute OpenPose joints in mean pose
-	Eigen::MatrixXd openposeJoints = smplModel_->getOpenPoseJMean();
-	for (int i = 0; i < 10; ++i)
-	{
-		openposeJoints += smplModel_->getOpenPoseJDirs()[i] * shapeParams_[i];
-	}
+	Eigen::MatrixXd openposeJoints = smplModel_->regressOpenposeRestJoints<double>(shapeParams_);
 
 	// Initialize depth
-	double init_tz = 2.5;
+	// Reasonable value for focal length of 5000
+	double init_tz = 1.0;
 
 	// OpenPose torso pairs:
 	// Right Shoulder (2) and Right Hip (9)
@@ -148,9 +143,11 @@ void SMPLOptimizer::fitInitialization(const std::vector<Point2D> &keypoints)
 	problem.AddResidualBlock(regularizerCost, nullptr, translation.data());
 
 	ceres::Solver::Options options;
-	options.max_num_iterations = 100;
 	options.linear_solver_type = ceres::DENSE_QR;
 	options.minimizer_progress_to_stdout = false;
+	options.function_tolerance = 1e-9;
+	options.gradient_tolerance = 1e-5;
+	options.max_num_iterations = 100;
 
 	ceres::Solve(options, &problem, &initSummary_);
 
@@ -163,9 +160,9 @@ void SMPLOptimizer::fitInitialization(const std::vector<Point2D> &keypoints)
 
 void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 {
-	std::vector<double> bestTranslation;
-	std::vector<double> bestShape;
-	std::vector<double> bestPose;
+	Eigen::Vector3d bestTranslation;
+	Eigen::VectorXd bestShape;
+	Eigen::VectorXd bestPose;
 	double bestCost = std::numeric_limits<double>::max();
 
 	for (int orientation = 0; orientation < 2; orientation++)
@@ -175,9 +172,9 @@ void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 			continue;
 
 		// Parameters to be optimized
-		std::vector<double> currentTranslation = {globalT_(0), globalT_(1), globalT_(2)};
-		std::vector<double> currentShape = shapeParams_;
-		std::vector<double> currentPose = poseParams_;
+		Eigen::Vector3d currentTranslation = {globalT_(0), globalT_(1), globalT_(2)};
+		Eigen::VectorXd currentShape = shapeParams_;
+		Eigen::VectorXd currentPose = poseParams_;
 
 		if (orientation == 1)
 		{
@@ -201,23 +198,33 @@ void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 
 		ceres::Problem problem;
 		ceres::Solver::Options options;
-		options.max_num_iterations = 100;
 		options.linear_solver_type = ceres::DENSE_QR;
 		options.minimizer_progress_to_stdout = false;
+		options.function_tolerance = 1e-9;
+		options.gradient_tolerance = 1e-5;
+		options.max_num_iterations = 30;
 
 		// Weight variables
 		double w_pose = 0.0;
         double w_shape = 0.0;
         double w_limits = 0.0;
-		double w_temp_pose = 0.0;
-		double w_temp_shape = 0.0;
-		double w_temp_trans = 0.0;
+		double w_temp = 0.0;
 
-		// Add reprojection cost
+		// Add reprojection cost (which includes the temporal residuals if enabled)
+		int num_residuals = keypoints.size() * 2;
+		if (hasPreviousFrame_ && options_.temporalRegularization)
+			num_residuals += 24*3;
+
 		ceres::CostFunction *cost =
 			new ceres::AutoDiffCostFunction<ReprojectionCost, ceres::DYNAMIC, 3, 72, 10>(
-				new ReprojectionCost(keypoints, *cameraModel_, *smplModel_),
-				keypoints.size() * 2 // Dynamic residual size
+				new ReprojectionCost(
+					keypoints, 
+					*cameraModel_, 
+					*smplModel_, 
+					&w_temp, 
+					hasPreviousFrame_ && options_.temporalRegularization ? &prevJoints_ : nullptr
+				),
+				num_residuals
 			);
 
 		problem.AddResidualBlock(
@@ -255,31 +262,6 @@ void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 			nullptr,
 			currentPose.data());
 
-		// Add temporal regularizer
-		if (hasPreviousFrame_ && options_.temporalRegularization)
-		{
-			// Add temporal regularizer for pose
-			ceres::CostFunction *poseTemporalCost =
-				new ceres::AutoDiffCostFunction<TemporalCost, 72, 72>(
-					new TemporalCost(&w_temp_pose, prevPoseParams_));
-
-			problem.AddResidualBlock(poseTemporalCost, nullptr, currentPose.data());
-
-			// Add temporal regularizer for shape
-			ceres::CostFunction *shapeTemporalCost =
-				new ceres::AutoDiffCostFunction<TemporalCost, 10, 10>(
-					new TemporalCost(&w_temp_shape, prevShapeParams_));
-
-			problem.AddResidualBlock(shapeTemporalCost, nullptr, currentShape.data());
-
-			// Add temporal regularizer for translation
-			ceres::CostFunction *translationTemporalCost =
-				new ceres::AutoDiffCostFunction<TemporalCost, 3, 3>(
-					new TemporalCost(&w_temp_trans, prevGlobalT_));
-
-			problem.AddResidualBlock(translationTemporalCost, nullptr, currentTranslation.data());
-		}
-
 		// SMPLify-x weights schedule
 		// Pose Prior / Shape Prior 
 		std::vector<std::pair<double, double>> weights = {
@@ -300,18 +282,7 @@ void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 			w_pose = weights[stage].first;
 			w_shape = weights[stage].second;
 			w_limits = 3.17 * w_pose;
-			w_temp_pose = 20.0;
-			w_temp_shape = 500.0;
-			w_temp_trans = 100.0;
-
-			// // FIX: Lock Translation in Stage 0
-			// // We trust the "Camera Init" step more than the "Stiff Body" step.
-			// if (stage == 0) {
-			// 	problem.SetParameterBlockConstant(currentTranslation.data());
-			// } 
-			// else {
-			// 	problem.SetParameterBlockVariable(currentTranslation.data());
-			// }
+			w_temp = 50.0;
 
 			ceres::Solve(options, &problem, &fullSummary_);
 
@@ -341,4 +312,10 @@ void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 	prevPoseParams_ = bestPose;
 	prevShapeParams_ = bestShape;
 	hasPreviousFrame_ = true;
+
+	// Compute final 3D joints to be used as temporal regularizer in next frame	
+	auto restJoints = smplModel_->regressSmplRestJoints<double>(shapeParams_);
+	auto jointTransforms = smplModel_->computeWorldTransforms<double>(poseParams_, restJoints);
+	for (int i = 0; i < 24; ++i)
+		prevJoints_.row(i) = jointTransforms.G_trans[i].transpose() + globalT_.transpose();
 }

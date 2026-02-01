@@ -39,8 +39,8 @@ public:
 
   // Expose parameters
   const Eigen::Vector3d &getGlobalT() const { return globalT_; }
-  const std::vector<double> &getPoseParams() const { return poseParams_; }
-  const std::vector<double> &getShapeParams() const { return shapeParams_; }
+  const Eigen::VectorXd &getPoseParams() const { return poseParams_; }
+  const Eigen::VectorXd &getShapeParams() const { return shapeParams_; }
 
   // Expose optimization summary
   const ceres::Solver::Summary &getInitSummary() const { return initSummary_; }
@@ -54,13 +54,10 @@ private:
   Eigen::Vector3d globalT_ = Eigen::Vector3d::Zero();
 
   // SMPL pose parameters (e.g., 72-dim axis-angle)
-  std::vector<double> poseParams_;
+  Eigen::VectorXd poseParams_;
 
   // SMPL shape parameters (e.g., 10 betas)
-  std::vector<double> shapeParams_;
-
-  // 2D joints for the current frame
-  std::vector<Point2D> current2DJoints;
+  Eigen::VectorXd shapeParams_;
 
   // Pointer to SMPL model
   SMPLModel *smplModel_ = nullptr;
@@ -68,11 +65,12 @@ private:
   // Pointer to camera model
   CameraModel *cameraModel_ = nullptr;
 
-  // Previous frame
+  // Previous (t-1) frame
   bool hasPreviousFrame_ = false;
-  std::vector<double> prevGlobalT_;
-  std::vector<double> prevPoseParams_;
-  std::vector<double> prevShapeParams_;
+  Eigen::VectorXd prevGlobalT_;
+  Eigen::VectorXd prevPoseParams_;
+  Eigen::VectorXd prevShapeParams_;
+  Eigen::Matrix<double, 24, 3> prevJoints_;
 
   // Summary for ceres optimizer
   ceres::Solver::Summary initSummary_;

@@ -351,120 +351,80 @@ bool SMPLModel::loadFromJson(const std::string &jsonPath)
 		return false;
 	}
 
-	// Initialize parameter vectors
-	poseParams_ = Eigen::VectorXd::Zero(3 * jointRegressor_.rows());
-	shapeParams_ = Eigen::VectorXd::Zero(shapeBlendShapes_.cols());
-
 	std::cout << "SMPLModel::loadFromJson - loaded model from " << jsonPath
 			  << "\n";
 
 	return true;
 }
 
-void SMPLModel::setPose(const std::vector<double> &poseParams)
+void SMPLModel::setPose(const Eigen::VectorXd &poseParams)
 {
-	poseParams_.resize(static_cast<int>(poseParams.size()));
-	for (int i = 0; i < static_cast<int>(poseParams.size()); ++i)
-	{
-		poseParams_[i] = static_cast<double>(poseParams[i]);
-	}
+	poseParams_ = poseParams;
 }
 
-void SMPLModel::setShape(const std::vector<double> &shapeParams)
+void SMPLModel::setShape(const Eigen::VectorXd &shapeParams)
 {
-	shapeParams_.resize(static_cast<int>(shapeParams.size()));
-	for (int i = 0; i < static_cast<int>(shapeParams.size()); ++i)
-	{
-		shapeParams_[i] = static_cast<double>(shapeParams[i]);
-	}
+	shapeParams_ = shapeParams;
 }
 
 SMPLMesh SMPLModel::computeMesh()
 {
 	SMPLMesh mesh;
 
-	const int N = templateVertices_.rows();
+	const int numVertices = templateVertices_.rows();
 	const int numJoints = jointRegressor_.rows();
 
-	// 1. Apply shape: get v_shaped and J_rest
-	Eigen::Matrix<double, Eigen::Dynamic, 1> beta(10);
-	for (int i = 0; i < 10; ++i)
-	{
-		beta(i) = shapeParams_(i);
-	}
-	auto shapeResult = applyShape<double>(beta);
-	const auto &v_shaped = shapeResult.shapedVertices;
-	const auto &J = shapeResult.restJoints;
+	// Shape Blend Shapes
+	Eigen::Matrix<double, 10, 1> beta = shapeParams_.head<10>();
+	Eigen::VectorXd shape_offsets = shapeBlendShapes_ * beta;
+	Eigen::MatrixXd restVertices = templateVertices_ + Eigen::Map<const Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor>>(
+		shape_offsets.data(), 
+		numVertices, 
+		3
+	);
 
-	// 2. Apply pose: get rotations, G_rot, G_trans
-	Eigen::Matrix<double, 72, 1> theta;
-	for (int i = 0; i < 72; ++i)
-	{
-		theta(i) = poseParams_(i);
-	}
-	auto poseResult = applyPose<double>(theta, J);
+	// Compute rest joints
+	Eigen::Matrix<double, 24, 3> restJoints = regressSmplRestJoints<double>(shapeParams_);
 
-	// 3. Pose blend shapes (uses rotations from poseResult)
+	// Compute joint transforms
+	Eigen::Matrix<double, 72, 1> theta = poseParams_.head<72>();
+	auto jointTransforms = computeWorldTransforms<double>(theta, restJoints);
+
+	// Pose blend shapes
 	Eigen::VectorXd pose_map((numJoints - 1) * 9);
 	for (int i = 1; i < numJoints; ++i)
 	{
-		Eigen::Matrix3d diff =
-			poseResult.rotations[i] - Eigen::Matrix3d::Identity();
+		Eigen::Matrix3d diff = jointTransforms.rotations[i] - Eigen::Matrix3d::Identity();
 		Eigen::Matrix<double, 3, 3, Eigen::RowMajor> rowMajorDiff = diff;
 		Eigen::Map<Eigen::VectorXd>(pose_map.data() + (i - 1) * 9, 9) =
 			Eigen::Map<Eigen::VectorXd>(rowMajorDiff.data(), 9);
 	}
 
-	Eigen::MatrixXd v_posed = v_shaped;
-	if (poseBlendShapes_.cols() == pose_map.size())
-	{
-		Eigen::VectorXd pose_offset = poseBlendShapes_ * pose_map;
-		v_posed += Eigen::Map<
-			const Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor>>(
-			pose_offset.data(), N, 3);
-	}
-	else
-	{
-		std::cerr << "SMPLModel::getMesh - pose_blend_shapes dimension mismatch: "
-				  << poseBlendShapes_.rows() << "x" << poseBlendShapes_.cols()
-				  << " vs pose_map size " << pose_map.size() << std::endl;
-	}
+	Eigen::MatrixXd v_posed = restVertices;
+	Eigen::VectorXd pose_offset = poseBlendShapes_ * pose_map;
+	v_posed += Eigen::Map<
+		const Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor>>(
+		pose_offset.data(), numVertices, 3);
 
-	// 4. Build LBS transforms (uses G_rot, G_trans from poseResult)
+	// Linear Blend Skinning
+	std::vector<Eigen::Matrix3d> R(numJoints);
+	std::vector<Eigen::Vector3d> T(numJoints);
 
-	// Convert to Matrix4d for LBS (with rest pose removal)
-	std::vector<Eigen::Matrix4d> G(numJoints);
-	for (int i = 0; i < numJoints; ++i)
-	{
-		G[i].setIdentity();
-		G[i].block<3, 3>(0, 0) = poseResult.G_rot[i];
-		G[i].block<3, 1>(0, 3) = poseResult.G_trans[i];
-		// Apply rest pose removal
-		Eigen::Matrix4d rest = Eigen::Matrix4d::Identity();
-		rest.block<3, 1>(0, 3) = -J.row(i).transpose();
-		G[i] = G[i] * rest;
+	for (int i = 0; i < numJoints; ++i) {
+		R[i] = jointTransforms.G_rot[i];
+		T[i] = jointTransforms.G_trans[i] - (R[i] * restJoints.row(i).transpose());
 	}
 
-	// 5. Linear Blend Skinning
-	Eigen::MatrixXd v_final(N, 3);
+	Eigen::MatrixXd v_final = Eigen::MatrixXd::Zero(numVertices, 3);
 
-	for (int i = 0; i < N; ++i)
-	{
-		Eigen::Vector4d v_homo(v_posed(i, 0), v_posed(i, 1), v_posed(i, 2), 1.0f);
-		Eigen::Vector4d v_sum = Eigen::Vector4d::Zero();
-
-		for (int j = 0; j < numJoints; ++j)
-		{
-			double w = weights_(i, j);
-			v_sum += w * (G[j] * v_homo);
-		}
-
-		v_final.row(i) = v_sum.head<3>().transpose();
+	for (int j = 0; j < numJoints; ++j) {
+		Eigen::MatrixXd transformed = (v_posed * R[j].transpose()).rowwise() + T[j].transpose();
+		v_final += weights_.col(j).asDiagonal() * transformed;
 	}
 
 	// Output mesh
-	mesh.vertices.reserve(N);
-	for (int i = 0; i < N; ++i)
+	mesh.vertices.reserve(numVertices);
+	for (int i = 0; i < numVertices; ++i)
 	{
 		mesh.vertices.emplace_back(v_final(i, 0), v_final(i, 1), v_final(i, 2));
 	}

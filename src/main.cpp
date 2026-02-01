@@ -18,6 +18,8 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <iomanip>
+#include <sstream>
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -154,8 +156,6 @@ int main(int argc, char* argv[]) {
 
     while (loader.readFrame(frame)) {
         frameIdx++;
-
-        if (frameIdx > 1200) break;
 
         // Handle debug-frame mode
         if (specificFrame) {

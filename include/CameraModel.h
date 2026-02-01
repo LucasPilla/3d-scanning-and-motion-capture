@@ -17,17 +17,13 @@ public:
 
     CameraModel(double frameWidth, double frameHeight)
     {
-        K_.fx = frameWidth;
-        K_.fy = frameWidth;
+        K_.fx = 1000.0;
+        K_.fy = 1000.0;
         K_.cx = frameWidth / 2.0;
         K_.cy = frameHeight / 2.0;
         frameWidth_ = frameWidth;
         frameHeight_ = frameHeight;
     }
-
-    explicit CameraModel(const CameraIntrinsics& intrinsics)
-        : K_(intrinsics)
-    {}
 
     const CameraIntrinsics& intrinsics() const { return K_; }
     double getFrameWidth() const { return frameWidth_; }
