@@ -1,16 +1,5 @@
 // PoseDetector.cpp
 // Implementation of the PoseDetector class (OpenPose wrapper).
-// 
-// Contains the code for:
-//   - Initializing the OpenPose wrapper
-//   - Precomputed or live joint detection
-//   - Converting OpenPose output to our internal keypoint format
-//
-// TODOs:
-//   - Set OpenPose configs (done)
-//   - Implement detect keypoints perframe (done)
-//   - Handle multiple people (for now we will use person at index 0)
-
 
 #include "PoseDetector.h"
 #include <nlohmann/json.hpp>
@@ -36,9 +25,9 @@ PoseDetector::PoseDetector(std::optional<std::string> precomputedKeypointsPath)
         poseConfig.modelFolder = "/opt/openpose/models/";
         poseConfig.renderMode = op::RenderMode::None;
         
-        // Use smaller network input for speed (width, height) in pixels
-        // You can tweak these: smaller = faster but less accurate
-        poseConfig.netInputSize = {320, 176}; // smaller = faster
+        // // Use smaller network input for speed (width, height) in pixels
+        // // You can tweak these: smaller = faster but less accurate
+        // poseConfig.netInputSize = {960, 544}; // smaller = faster
 
         // Disable rendering overlays to save CPU (we don't use the rendered image)
         poseConfig.renderMode = op::RenderMode::None;
@@ -65,15 +54,15 @@ bool PoseDetector::loadKeypoints(const std::string& jsonPath)
 
 
     for (auto& [frameStr, joints] : j.items()) {
-        Pose2D pose;
+        std::vector<Point2D> keypoints;
         for (auto& p : joints) {
-            pose.keypoints.push_back({
+            keypoints.push_back({
                 p["x"].get<float>(),
                 p["y"].get<float>(),
                 p["score"].get<float>()
             });
         }
-        cachedPoses_[std::stoi(frameStr)] = pose;
+        cachedPoses_[std::stoi(frameStr)] = keypoints;
     }
 
     std::cout << "Loaded keypoints for "
@@ -81,17 +70,17 @@ bool PoseDetector::loadKeypoints(const std::string& jsonPath)
     return true;
 }
 
-Pose2D PoseDetector::detect(const cv::Mat& frame, int frameIdx)
+std::vector<Point2D> PoseDetector::detect(const cv::Mat& frame, int frameIdx)
 {
-    //Precomputed mode
+    // Precomputed mode
     if (source_ == PoseSource::Precomputed) {
         if (cachedPoses_.count(frameIdx))
             return cachedPoses_[frameIdx];
-        return Pose2D{};
+        return std::vector<Point2D>{};
     }
 
     // OpenPose live mode
-    Pose2D pose2D;
+    std::vector<Point2D> keypoints;
 
     // Convert OpenCV image into OpenPose input format
     auto input = OP_CV2OPCONSTMAT(frame); 
@@ -100,21 +89,21 @@ Pose2D PoseDetector::detect(const cv::Mat& frame, int frameIdx)
     auto result = openpose_->emplaceAndPop(input);
 
     if (!result || result->empty()) // No detections
-        return pose2D;
+        return keypoints;
 
     const auto& kp = result->at(0)->poseKeypoints;
     int numJoints = kp.getSize(1);
 
     for (int i = 0; i < numJoints; i++) {
         int idx = 3 * i;
-        pose2D.keypoints.push_back({
+        keypoints.push_back({
             kp[idx],
             kp[idx + 1],
             kp[idx + 2]
         });
     }
 
-    // Return Pose2D.
+    // Return keypoints.
     // Joints remain in OpenPose BODY_25 order:
     // 0 -> Nose
     // 1 -> Neck
@@ -143,5 +132,5 @@ Pose2D PoseDetector::detect(const cv::Mat& frame, int frameIdx)
     // 24 -> RHeel
     // 25 -> Background
 
-    return pose2D;
+    return keypoints;
 }

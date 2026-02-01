@@ -8,87 +8,83 @@
 #include "CameraModel.h"
 #include "PoseDetector.h"
 #include "SMPLModel.h"
-#include "TemporalSmoother.h"
 #include <Eigen/Dense>
+#include <ceres/ceres.h>
 #include <vector>
 
 // Interface for SMPL fitting
-class SMPLOptimizer
-{
+class SMPLOptimizer {
 public:
-	// Configuration flags controlling advanced features
-	// These correspond to the project proposal:
-	//  - TEMPORAL_REGULARIZATION
-	//  - WARM_STARTING
-	//  - FREEZE_SHAPE_PARAMETERS
-	struct Options
-	{
-		bool temporalRegularization = false;
-		bool warmStarting = false;
-		bool freezeShapeParameters = false;
-	};
 
-	explicit SMPLOptimizer(SMPLModel *smplModel, CameraModel *cameraModel,
-							  const Options &options);
+  // These correspond to the project proposal:
+  struct Options {
+    bool temporalRegularization = false;
+    bool warmStarting = false;
+    bool freezeShapeParameters = false;
+  };
 
-	// Fit SMPL parameters to a single frame
-	void fitFrame(const Pose2D &observation);
+  // Check if warm starting can be used
+  bool useWarmStarting() { 
+    return hasPreviousFrame_ && options_.warmStarting; 
+  }
 
-	// Step 1: Fit a global 3D rigid transform (R, t) in camera space so that
-	// SMPL 3D joints align better with OpenPose 2D detections
-	void fitRigid(const Pose2D &observation);
+  // Check if temporal regularization can be used
+  bool useTemporalRegularization() { 
+    return hasPreviousFrame_ && options_.temporalRegularization;
+  }
 
-	// Step 2: Optimize SMPL pose parameters using reprojection error
-	void fitPose(const Pose2D &observation);
+  // Check if shape parameters can be freezed
+  bool freezeShapeParameters() { 
+    return prevShapeParams_.size() > 0 && options_.freezeShapeParameters;
+  }
 
-	// Get the global rigid transform computed in Step 1
-	const Eigen::Matrix3d &getGlobalR() const { return globalR_; }
-	const Eigen::Vector3d &getGlobalT() const { return globalT_; }
+  explicit SMPLOptimizer(SMPLModel *smplModel, CameraModel *cameraModel, const Options &options);
 
-	// Expose current SMPL pose and shape parameters
-	const std::vector<double> &getPoseParams() const { return poseParams; }
-	const std::vector<double> &getShapeParams() const { return shapeParams; }
+  // Fit SMPL parameters to a single frame
+  void fitFrame(const std::vector<Point2D> &keypoints);
 
-	// Expose last optimization diagnostics
-	double getLastFitRigidCost() const { return lastFitRigidCost_; }
-	int    getLastFitRigidIters() const { return lastFitRigidIters_; }
-	double getLastFitPoseCost() const { return lastFitPoseCost_; }
-	int    getLastFitPoseIters() const { return lastFitPoseIters_; }
+  // Step 1: Estimate initial translation and rotation based on torso joints.
+  void fitInitialization(const std::vector<Point2D> &keypoints);
+
+  // Step 2: Optimize SMPL parameters
+  void fitFull(const std::vector<Point2D> &keypoints);
+
+  // Expose parameters
+  const Eigen::Vector3d &getGlobalT() const { return globalT_; }
+  const Eigen::VectorXd &getPoseParams() const { return poseParams_; }
+  const Eigen::VectorXd &getShapeParams() const { return shapeParams_; }
+
+  // Expose optimization summary
+  const ceres::Solver::Summary &getInitSummary() const { return initSummary_; }
+  const ceres::Solver::Summary &getFullSummary() const { return fullSummary_; }
 
 private:
-	// Global rigid transform computed in Step 1 (fitRigid)
-	Eigen::Matrix3d globalR_ = Eigen::Matrix3d::Identity();
-	Eigen::Vector3d globalT_ = Eigen::Vector3d::Zero();
+  // Configuration flags (see Options above).
+  Options options_;
 
-	// Configuration flags (see Options above).
-	Options options;
+  // Global translation parameters
+  Eigen::Vector3d globalT_ = Eigen::Vector3d::Zero();
 
-	// SMPL pose parameters (e.g., 72-dim axis-angle)
-	std::vector<double> poseParams;
+  // SMPL pose parameters (e.g., 72-dim axis-angle)
+  Eigen::VectorXd poseParams_;
 
-	// SMPL shape parameters (e.g., 10 betas)
-	std::vector<double> shapeParams;
+  // SMPL shape parameters (e.g., 10 betas)
+  Eigen::VectorXd shapeParams_;
 
-	// 2D joints for the current frame
-	Pose2D current2DJoints;
+  // Pointer to SMPL model
+  SMPLModel *smplModel_ = nullptr;
 
-	// Pointer to SMPL model
-	SMPLModel *smplModel = nullptr;
+  // Pointer to camera model
+  CameraModel *cameraModel_ = nullptr;
 
-	// Pointer to camera model
-	CameraModel *cameraModel = nullptr;
+  // Previous (t-1) frame
+  bool hasPreviousFrame_ = false;
+  Eigen::VectorXd prevGlobalT_;
+  Eigen::VectorXd prevPoseParams_;
+  Eigen::VectorXd prevShapeParams_;
+  Eigen::Matrix<double, 24, 3> prevJoints_;
 
-	// History of parameters for temporal smoothing / regularization
-	TemporalSmoother smoother;
-	TemporalSmoother::ParamSequence poseHistory;
-	TemporalSmoother::ParamSequence shapeHistory;
-
-	// Tracks whether we already have a solution from a previous frame
-    bool hasPreviousFrame_ = false;
-
-	// Ceres costs and iterations
-	double lastFitRigidCost_ = -1.0;
-	int    lastFitRigidIters_ = 0;
-	double lastFitPoseCost_ = -1.0;
-	int    lastFitPoseIters_ = 0;
+  // Summary for ceres optimizer
+  ceres::Solver::Summary initSummary_;
+  ceres::Solver::Summary fullSummary_;
 };

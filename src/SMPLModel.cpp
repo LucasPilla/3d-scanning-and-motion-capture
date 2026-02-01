@@ -9,7 +9,7 @@
 
 using nlohmann::json;
 
-bool SMPLMesh::save(const std::string &path) const
+bool SMPLMesh::save(const std::filesystem::path path) const
 {
 
 	std::ofstream outFile(path);
@@ -178,6 +178,24 @@ bool SMPLModel::loadFromJson(const std::string &jsonPath)
 			}
 		}
 
+		// -------- openpose_joint_regressor (25, N) --------
+		const auto &opJr = j.at("openpose_joint_regressor");
+		const int numOpJoints = static_cast<int>(opJr.size());
+		if (numOpJoints == 0 || static_cast<int>(opJr[0].size()) != numVertices)
+		{
+			std::cerr << "SMPLModel::loadFromJson - invalid openpose_joint_regressor shape\n";
+			return false;
+		}
+
+		openPoseJointRegressor_.resize(numOpJoints, numVertices);
+		for (int jIdx = 0; jIdx < numOpJoints; ++jIdx)
+		{
+			for (int v = 0; v < numVertices; ++v)
+			{
+				openPoseJointRegressor_(jIdx, v) = static_cast<double>(opJr[jIdx][v]);
+			}
+		}
+
 		// -------- kinematic_tree (2, numJoints) --------
 		const auto &kt = j.at("kinematic_tree");
 		const int ktRows = static_cast<int>(kt.size()); // Expected: 2
@@ -210,99 +228,121 @@ bool SMPLModel::loadFromJson(const std::string &jsonPath)
 			}
 		}
 
-        // -------- gmm_means --------
-        if (j.contains("gmm_means"))
-        {
-            const auto &gmm_means = j.at("gmm_means");
-            int gmmMeansRows = static_cast<int>(gmm_means.size());
-            int gmmMeansCols = static_cast<int>(gmm_means[0].size());
-            gmmMeans_.resize(gmmMeansRows, gmmMeansCols);
-            for (int i = 0; i < gmmMeansRows; ++i)
-                for (int k = 0; k < gmmMeansCols; ++k)
-                    gmmMeans_(i, k) = static_cast<double>(gmm_means[i][k]);
-        }
+		// ---------- GMM data -----------
 
-        // -------- gmm_covars --------
-        // JSON is 3D (8, 69, 69). We flatten the last two dimensions to fit Eigen Matrix (8, 4761).
-        if (j.contains("gmm_covars"))
-        {
-            const auto &gmm_covars = j.at("gmm_covars");
-            int gmmCovarsRows = static_cast<int>(gmm_covars.size());
-            int gmmCovarsDim1 = static_cast<int>(gmm_covars[0].size());
-            int gmmCovarsDim2 = static_cast<int>(gmm_covars[0][0].size());
-            
-            gmmCovars_.resize(gmmCovarsRows, gmmCovarsDim1 * gmmCovarsDim2);
-            
-            for (int i = 0; i < gmmCovarsRows; ++i)
-            {
-                for (int r = 0; r < gmmCovarsDim1; ++r)
-                {
-                    for (int c = 0; c < gmmCovarsDim2; ++c)
-                    {
-                        int flatIdx = r * gmmCovarsDim2 + c;
-                        gmmCovars_(i, flatIdx) = static_cast<double>(gmm_covars[i][r][c]);
-                    }
-                }
-            }
-        }
+		// Load gmm_means
+		const auto &gmm_means = j.at("gmm_means");
+		int n_gaussians = static_cast<int>(gmm_means.size());
+		int n_dims = static_cast<int>(gmm_means[0].size());
+		gmmMeans_.resize(n_gaussians, n_dims);
+		for (int k = 0; k < n_gaussians; ++k)
+			for (int j = 0; j < n_dims; ++j)
+				gmmMeans_(k, j) = static_cast<double>(gmm_means[k][j]);
 
-        // -------- gmm_weights --------
-        if (j.contains("gmm_weights"))
-        {
-            const auto &gmm_weights = j.at("gmm_weights");
-            int gmmWeightsRows = static_cast<int>(gmm_weights.size());
-            gmmWeights_.resize(gmmWeightsRows, 1);
-            for (int i = 0; i < gmmWeightsRows; ++i)
-                gmmWeights_(i, 0) = static_cast<double>(gmm_weights[i]);
-        }
+		// Load gmm_covars
+		const auto &gmm_covars = j.at("gmm_covars");
+		gmmPrecChols_.resize(n_gaussians);
+		Eigen::VectorXd det_factors(n_gaussians);
+		for (int k = 0; k < n_gaussians; ++k)
+		{
+			// Load covariance matrix for current gaussian
+			Eigen::MatrixXd sigma(n_dims, n_dims);
+			for (int r = 0; r < n_dims; ++r) 
+				for (int c = 0; c < n_dims; ++c) 
+					sigma(r, c) = (double)gmm_covars[k][r][c];
 
-        // -------- capsule_v2lens --------
-        if (j.contains("capsule_v2lens"))
-        {
-            const auto &capsule_v2lens = j.at("capsule_v2lens");
-            int capsuleV2lensRows = static_cast<int>(capsule_v2lens.size());
-            int capsuleV2lensCols = static_cast<int>(capsule_v2lens[0].size());
-            capsuleV2Lens_.resize(capsuleV2lensRows, capsuleV2lensCols);
-            for (int i = 0; i < capsuleV2lensRows; ++i)
-                for (int k = 0; k < capsuleV2lensCols; ++k)
-                    capsuleV2Lens_(i, k) = static_cast<double>(capsule_v2lens[i][k]);
-        }
+			// Calculate determinant for weights normalization later
+			det_factors[k] = std::sqrt(sigma.determinant());
 
-        // -------- capsule_betas2lens --------
-        if (j.contains("capsule_betas2lens"))
-        {
-            const auto &capsule_betas2lens = j.at("capsule_betas2lens");
-            int capsuleBetas2lensRows = static_cast<int>(capsule_betas2lens.size());
-            int capsuleBetas2lensCols = static_cast<int>(capsule_betas2lens[0].size());
-            capsuleBetas2Lens_.resize(capsuleBetas2lensRows, capsuleBetas2lensCols);
-            for (int i = 0; i < capsuleBetas2lensRows; ++i)
-                for (int k = 0; k < capsuleBetas2lensCols; ++k)
-                    capsuleBetas2Lens_(i, k) = static_cast<double>(capsule_betas2lens[i][k]);
-        }
+			// Precompute Precision Cholesky
+			gmmPrecChols_[k] = sigma.inverse().llt().matrixU();
+		}
 
-        // -------- capsule_v2rads --------
-        if (j.contains("capsule_v2rads"))
-        {
-            const auto &capsule_v2rads = j.at("capsule_v2rads");
-            int capsuleV2radsRows = static_cast<int>(capsule_v2rads.size());
-            int capsuleV2radsCols = static_cast<int>(capsule_v2rads[0].size());
-            capsuleV2Rads_.resize(capsuleV2radsRows, capsuleV2radsCols);
-            for (int i = 0; i < capsuleV2radsRows; ++i)
-                for (int k = 0; k < capsuleV2radsCols; ++k)
-                    capsuleV2Rads_(i, k) = static_cast<double>(capsule_v2rads[i][k]);
-        }
+		// Load gmm_weights
+		const auto &gmm_weights = j.at("gmm_weights");
+		gmmWeights_.resize(n_gaussians, 1);
+		for (int k = 0; k < n_gaussians; ++k)
+			gmmWeights_(k, 0) = static_cast<double>(gmm_weights[k]);
 
-        // -------- capsule_betas2rads --------
-        if (j.contains("capsule_betas2rads"))
-        {
-            const auto &capsule_betas2rads = j.at("capsule_betas2rads");
-            int capsuleBetas2radsRows = static_cast<int>(capsule_betas2rads.size());
-            int capsuleBetas2radsCols = static_cast<int>(capsule_betas2rads[0].size());
-            capsuleBetas2Rads_.resize(capsuleBetas2radsRows, capsuleBetas2radsCols);
-            for (int i = 0; i < capsuleBetas2radsRows; ++i)
-                for (int k = 0; k < capsuleBetas2radsCols; ++k)
-                    capsuleBetas2Rads_(i, k) = static_cast<double>(capsule_betas2rads[i][k]);
-        }
+		// Apply normalization to weights
+		double min_sqr_det = det_factors.minCoeff();
+		double const_term = std::pow(2 * M_PI, n_dims / 2.0);
+		gmmWeights_.array() /= (const_term * (det_factors.array() / min_sqr_det));
+
+		// Precompute GMM mean pose
+		gmmMeanPose_ = gmmMeans_.transpose() * gmmWeights_;
+
+		// // -------- capsule_v2lens --------
+		// if (j.contains("capsule_v2lens")) {
+		//   const auto &capsule_v2lens = j.at("capsule_v2lens");
+		//   int capsuleV2lensRows = static_cast<int>(capsule_v2lens.size());
+		//   int capsuleV2lensCols = static_cast<int>(capsule_v2lens[0].size());
+		//   capsuleV2Lens_.resize(capsuleV2lensRows, capsuleV2lensCols);
+		//   for (int i = 0; i < capsuleV2lensRows; ++i)
+		//     for (int k = 0; k < capsuleV2lensCols; ++k)
+		//       capsuleV2Lens_(i, k) = static_cast<double>(capsule_v2lens[i][k]);
+		// }
+
+		// // -------- capsule_betas2lens --------
+		// if (j.contains("capsule_betas2lens")) {
+		//   const auto &capsule_betas2lens = j.at("capsule_betas2lens");
+		//   int capsuleBetas2lensRows = static_cast<int>(capsule_betas2lens.size());
+		//   int capsuleBetas2lensCols =
+		//       static_cast<int>(capsule_betas2lens[0].size());
+		//   capsuleBetas2Lens_.resize(capsuleBetas2lensRows, capsuleBetas2lensCols);
+		//   for (int i = 0; i < capsuleBetas2lensRows; ++i)
+		//     for (int k = 0; k < capsuleBetas2lensCols; ++k)
+		//       capsuleBetas2Lens_(i, k) =
+		//           static_cast<double>(capsule_betas2lens[i][k]);
+		// }
+
+		// // -------- capsule_v2rads --------
+		// if (j.contains("capsule_v2rads")) {
+		//   const auto &capsule_v2rads = j.at("capsule_v2rads");
+		//   int capsuleV2radsRows = static_cast<int>(capsule_v2rads.size());
+		//   int capsuleV2radsCols = static_cast<int>(capsule_v2rads[0].size());
+		//   capsuleV2Rads_.resize(capsuleV2radsRows, capsuleV2radsCols);
+		//   for (int i = 0; i < capsuleV2radsRows; ++i)
+		//     for (int k = 0; k < capsuleV2radsCols; ++k)
+		//       capsuleV2Rads_(i, k) = static_cast<double>(capsule_v2rads[i][k]);
+		// }
+
+		// // -------- capsule_betas2rads --------
+		// if (j.contains("capsule_betas2rads")) {
+		//   const auto &capsule_betas2rads = j.at("capsule_betas2rads");
+		//   int capsuleBetas2radsRows = static_cast<int>(capsule_betas2rads.size());
+		//   int capsuleBetas2radsCols =
+		//       static_cast<int>(capsule_betas2rads[0].size());
+		//   capsuleBetas2Rads_.resize(capsuleBetas2radsRows, capsuleBetas2radsCols);
+		//   for (int i = 0; i < capsuleBetas2radsRows; ++i)
+		//     for (int k = 0; k < capsuleBetas2radsCols; ++k)
+		//       capsuleBetas2Rads_(i, k) =
+		//           static_cast<double>(capsule_betas2rads[i][k]);
+		// }
+
+		// ---------- Precompute for optimzation ----------
+		// Used in ReprojectionCost for directly computing joints
+
+		// Precompute J_mean 
+		J_mean_ = jointRegressor_ * templateVertices_;
+		openposeJ_mean_ = openPoseJointRegressor_ * templateVertices_;
+
+		// Precompute J_dirs
+		J_dirs_.resize(10);
+		openposeJ_dirs_.resize(10);
+		for (int i = 0; i < 10; ++i)
+		{
+			// Get vector coresponding to beta[i]
+			Eigen::VectorXd shape_vector = shapeBlendShapes_.col(i);
+
+			// Reshape (20670, 1) to (6890, 3)
+			Eigen::Map<const Eigen::Matrix<double, 6890, 3, Eigen::RowMajor>>
+				shape_vector_reshaped(shape_vector.data());
+
+			// Compute J_dirs
+			J_dirs_[i] = jointRegressor_ * shape_vector_reshaped;
+			openposeJ_dirs_[i] = openPoseJointRegressor_ * shape_vector_reshaped;
+		}
 	}
 	catch (const std::exception &e)
 	{
@@ -311,123 +351,80 @@ bool SMPLModel::loadFromJson(const std::string &jsonPath)
 		return false;
 	}
 
-	// Initialize parameter vectors
-	poseParams_ = Eigen::VectorXd::Zero(3 * jointRegressor_.rows());
-	shapeParams_ = Eigen::VectorXd::Zero(shapeBlendShapes_.cols());
-
 	std::cout << "SMPLModel::loadFromJson - loaded model from " << jsonPath
 			  << "\n";
 
 	return true;
 }
 
-void SMPLModel::setPose(const std::vector<double> &poseParams)
+void SMPLModel::setPose(const Eigen::VectorXd &poseParams)
 {
-	poseParams_.resize(static_cast<int>(poseParams.size()));
-	for (int i = 0; i < static_cast<int>(poseParams.size()); ++i)
-	{
-		poseParams_[i] = static_cast<double>(poseParams[i]);
-	}
+	poseParams_ = poseParams;
 }
 
-void SMPLModel::setShape(const std::vector<double> &shapeParams)
+void SMPLModel::setShape(const Eigen::VectorXd &shapeParams)
 {
-	shapeParams_.resize(static_cast<int>(shapeParams.size()));
-	for (int i = 0; i < static_cast<int>(shapeParams.size()); ++i)
-	{
-		shapeParams_[i] = static_cast<double>(shapeParams[i]);
-	}
+	shapeParams_ = shapeParams;
 }
 
 SMPLMesh SMPLModel::computeMesh()
 {
 	SMPLMesh mesh;
 
-	const int N = templateVertices_.rows();
+	const int numVertices = templateVertices_.rows();
 	const int numJoints = jointRegressor_.rows();
 
-	// 1. Apply shape: get v_shaped and J_rest
-	Eigen::Matrix<double, Eigen::Dynamic, 1> beta(10);
-	for (int i = 0; i < 10; ++i)
-	{
-		beta(i) = shapeParams_(i);
-	}
-	auto shapeResult = applyShape<double>(beta);
-	const auto &v_shaped = shapeResult.shapedVertices;
-	const auto &J = shapeResult.restJoints;
+	// Shape Blend Shapes
+	Eigen::Matrix<double, 10, 1> beta = shapeParams_.head<10>();
+	Eigen::VectorXd shape_offsets = shapeBlendShapes_ * beta;
+	Eigen::MatrixXd restVertices = templateVertices_ + Eigen::Map<const Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor>>(
+		shape_offsets.data(), 
+		numVertices, 
+		3
+	);
 
-	// 2. Apply pose: get rotations, G_rot, G_trans
-	Eigen::Matrix<double, 72, 1> theta;
-	for (int i = 0; i < 72; ++i)
-	{
-		theta(i) = poseParams_(i);
-	}
-	auto poseResult = applyPose<double>(theta, J);
+	// Compute rest joints
+	Eigen::Matrix<double, 24, 3> restJoints = regressSmplRestJoints<double>(shapeParams_);
 
-	// Store posed joints for logging
-	lastJoints3D_ = poseResult.posedJoints;
+	// Compute joint transforms
+	Eigen::Matrix<double, 72, 1> theta = poseParams_.head<72>();
+	auto jointTransforms = computeWorldTransforms<double>(theta, restJoints);
 
-	// 3. Pose blend shapes (uses rotations from poseResult)
+	// Pose blend shapes
 	Eigen::VectorXd pose_map((numJoints - 1) * 9);
 	for (int i = 1; i < numJoints; ++i)
 	{
-		Eigen::Matrix3d diff =
-			poseResult.rotations[i] - Eigen::Matrix3d::Identity();
+		Eigen::Matrix3d diff = jointTransforms.rotations[i] - Eigen::Matrix3d::Identity();
 		Eigen::Matrix<double, 3, 3, Eigen::RowMajor> rowMajorDiff = diff;
 		Eigen::Map<Eigen::VectorXd>(pose_map.data() + (i - 1) * 9, 9) =
 			Eigen::Map<Eigen::VectorXd>(rowMajorDiff.data(), 9);
 	}
 
-	Eigen::MatrixXd v_posed = v_shaped;
-	if (poseBlendShapes_.cols() == pose_map.size())
-	{
-		Eigen::VectorXd pose_offset = poseBlendShapes_ * pose_map;
-		v_posed += Eigen::Map<
-			const Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor>>(
-			pose_offset.data(), N, 3);
-	}
-	else
-	{
-		std::cerr << "SMPLModel::getMesh - pose_blend_shapes dimension mismatch: "
-				  << poseBlendShapes_.rows() << "x" << poseBlendShapes_.cols()
-				  << " vs pose_map size " << pose_map.size() << std::endl;
-	}
+	Eigen::MatrixXd v_posed = restVertices;
+	Eigen::VectorXd pose_offset = poseBlendShapes_ * pose_map;
+	v_posed += Eigen::Map<
+		const Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor>>(
+		pose_offset.data(), numVertices, 3);
 
-	// 4. Build LBS transforms (uses G_rot, G_trans from poseResult)
+	// Linear Blend Skinning
+	std::vector<Eigen::Matrix3d> R(numJoints);
+	std::vector<Eigen::Vector3d> T(numJoints);
 
-	// Convert to Matrix4d for LBS (with rest pose removal)
-	std::vector<Eigen::Matrix4d> G(numJoints);
-	for (int i = 0; i < numJoints; ++i)
-	{
-		G[i].setIdentity();
-		G[i].block<3, 3>(0, 0) = poseResult.G_rot[i];
-		G[i].block<3, 1>(0, 3) = poseResult.G_trans[i];
-		// Apply rest pose removal
-		Eigen::Matrix4d rest = Eigen::Matrix4d::Identity();
-		rest.block<3, 1>(0, 3) = -J.row(i).transpose();
-		G[i] = G[i] * rest;
+	for (int i = 0; i < numJoints; ++i) {
+		R[i] = jointTransforms.G_rot[i];
+		T[i] = jointTransforms.G_trans[i] - (R[i] * restJoints.row(i).transpose());
 	}
 
-	// 5. Linear Blend Skinning
-	Eigen::MatrixXd v_final(N, 3);
+	Eigen::MatrixXd v_final = Eigen::MatrixXd::Zero(numVertices, 3);
 
-	for (int i = 0; i < N; ++i)
-	{
-		Eigen::Vector4d v_homo(v_posed(i, 0), v_posed(i, 1), v_posed(i, 2), 1.0f);
-		Eigen::Vector4d v_sum = Eigen::Vector4d::Zero();
-
-		for (int j = 0; j < numJoints; ++j)
-		{
-			double w = weights_(i, j);
-			v_sum += w * (G[j] * v_homo);
-		}
-
-		v_final.row(i) = v_sum.head<3>().transpose();
+	for (int j = 0; j < numJoints; ++j) {
+		Eigen::MatrixXd transformed = (v_posed * R[j].transpose()).rowwise() + T[j].transpose();
+		v_final += weights_.col(j).asDiagonal() * transformed;
 	}
 
 	// Output mesh
-	mesh.vertices.reserve(N);
-	for (int i = 0; i < N; ++i)
+	mesh.vertices.reserve(numVertices);
+	for (int i = 0; i < numVertices; ++i)
 	{
 		mesh.vertices.emplace_back(v_final(i, 0), v_final(i, 1), v_final(i, 2));
 	}

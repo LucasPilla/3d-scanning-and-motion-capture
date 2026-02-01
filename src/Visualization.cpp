@@ -1,14 +1,13 @@
 // Visualization.cpp
-
 // Implements visualization utilities for drawing detected 
 // keypoints, 3D joints and 3D mesh over the input frame
 
 #include "Visualization.h"
 #include "PoseDetector.h"
 
-Visualization::Visualization(int width, int height, double fps)
+Visualization::Visualization(int width, int height, double fps, std::filesystem::path outputPath)
 {
-	writer.open("output.mp4", cv::VideoWriter::fourcc('a', 'v', 'c', '1'), fps,
+	writer.open(outputPath, cv::VideoWriter::fourcc('a', 'v', 'c', '1'), fps,
 				cv::Size(width, height), true);
 
 	if (!writer.isOpened())
@@ -109,30 +108,13 @@ void Visualization::drawKeypoints(cv::Mat &frame,
 	}
 }
 
-void Visualization::drawJoints(cv::Mat &frame,
-							   const std::vector<Point2D> &joints,
-							   const cv::Scalar &color, int radius)
-{
-	for (const auto &pt : joints)
-	{
-		// skip invalid coordinates
-		if (pt.x <= 0.0f || pt.y <= 0.0f)
-		{
-			continue;
-		}
-
-		cv::Point cvPt(static_cast<int>(pt.x), static_cast<int>(pt.y));
-
-		cv::circle(frame, cvPt, radius, color, -1);
-	}
-}
-
 void Visualization::drawMesh(cv::Mat &frame, const SMPLMesh &mesh,
 							 const CameraModel &camera,
-							 const Eigen::Matrix3d &globalR,
-							 const Eigen::Vector3d &globalT,
-							 const cv::Scalar &color, int lineThickness)
+							 const Eigen::Vector3d &globalT)
 {
+	const cv::Scalar &color = cv::Scalar(0, 255, 255);
+	int lineThickness = 1;
+
 	const float fx = camera.intrinsics().fx;
 	const float fy = camera.intrinsics().fy;
 	const float cx = camera.intrinsics().cx;
@@ -151,7 +133,7 @@ void Visualization::drawMesh(cv::Mat &frame, const SMPLMesh &mesh,
 
 		// Apply global transform (camera-to-body alignment)
 		Eigen::Vector3d pWorld(v.x(), v.y(), v.z());
-		Eigen::Vector3d pCam = globalR * pWorld + globalT;
+		Eigen::Vector3d pCam = pWorld + globalT;
 
 		// Skip if behind camera
 		if (pCam.z() < 0.1)

@@ -1,16 +1,5 @@
 // VideoLoader.cpp
 // Implementation of the VideoLoader class declared in VideoLoader.h.
-// 
-// This file contains the actual logic for:
-//   - opening the video file using OpenCV
-//   - reading frames sequentially
-//   - returning frames for processing in the pipeline
-//
-// TODOs inside this file should implement:
-//   - constructor logic (done)
-//   - method for reading next frame (done)
-//   - optional frame skipping
-//   - any preprocessing (not necessary)
 
 #include "VideoLoader.h"
 #include <iostream>

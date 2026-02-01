@@ -29,7 +29,6 @@ add_executable(pipeline
     src/PoseDetector.cpp
     src/SMPLModel.cpp
     src/SMPLOptimizer.cpp
-    src/TemporalSmoother.cpp
     src/Visualization.cpp
 )
 
