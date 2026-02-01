@@ -33,7 +33,7 @@ Then, run the container using the command below. This mounts your current direct
 docker run -it --rm -v $(pwd):/usr/src/project 3dsmc-project
 ```
 
-## SMPL
+## Data
 
 To run this application, you need to download the **SMPL model** and the **GMM** files:
 
