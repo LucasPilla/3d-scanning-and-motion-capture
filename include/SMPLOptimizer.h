@@ -17,14 +17,26 @@ class SMPLOptimizer {
 public:
 
   // These correspond to the project proposal:
-  //  - TEMPORAL_REGULARIZATION
-  //  - WARM_STARTING
-  //  - FREEZE_SHAPE_PARAMETERS
   struct Options {
     bool temporalRegularization = false;
     bool warmStarting = false;
     bool freezeShapeParameters = false;
   };
+
+  // Check if warm starting can be used
+  bool useWarmStarting() { 
+    return hasPreviousFrame_ && options_.warmStarting; 
+  }
+
+  // Check if temporal regularization can be used
+  bool useTemporalRegularization() { 
+    return hasPreviousFrame_ && options_.temporalRegularization;
+  }
+
+  // Check if shape parameters can be freezed
+  bool freezeShapeParameters() { 
+    return prevShapeParams_.size() > 0 && options_.freezeShapeParameters;
+  }
 
   explicit SMPLOptimizer(SMPLModel *smplModel, CameraModel *cameraModel, const Options &options);
 

@@ -126,7 +126,7 @@ int main(int argc, char* argv[]) {
     SMPLOptimizer::Options fitOpts;
     fitOpts.temporalRegularization = true;
     fitOpts.warmStarting = true;
-    fitOpts.freezeShapeParameters = false;
+    fitOpts.freezeShapeParameters = true;
     SMPLOptimizer optimizer(&smplModel, &camera, fitOpts);
 
     DebugData debug;
@@ -156,6 +156,8 @@ int main(int argc, char* argv[]) {
 
     while (loader.readFrame(frame)) {
         frameIdx++;
+
+        if (frameIdx > 600) break;
 
         // Handle debug-frame mode
         if (specificFrame) {

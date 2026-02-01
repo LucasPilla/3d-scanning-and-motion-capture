@@ -17,8 +17,11 @@ public:
 
     CameraModel(double frameWidth, double frameHeight)
     {
-        K_.fx = 1000.0;
-        K_.fy = 1000.0;
+        // Those values were defined to approximate MPI INF 3DHP
+        // camera intrinsics. The official SMPLify implementation
+        // uses a hard-coded value of 5000.
+        K_.fx = 1500.0;
+        K_.fy = 1500.0;
         K_.cx = frameWidth / 2.0;
         K_.cy = frameHeight / 2.0;
         frameWidth_ = frameWidth;

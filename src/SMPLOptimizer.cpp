@@ -26,7 +26,7 @@ void SMPLOptimizer::fitFrame(const std::vector<Point2D> &keypoints)
 
 	// If warmStarting is not enabled we start optimization from scratch
 	// Otherwise we use current parameters, which refers to previous frame
-	if (!options_.warmStarting || !hasPreviousFrame_)
+	if (!useWarmStarting())
 	{
 		// Initialize pose with GMM mean
 		poseParams_ = Eigen::VectorXd::Zero(72);
@@ -52,8 +52,7 @@ void SMPLOptimizer::fitInitialization(const std::vector<Point2D> &keypoints)
 	// Compute OpenPose joints in mean pose
 	Eigen::MatrixXd openposeJoints = smplModel_->regressOpenposeRestJoints<double>(shapeParams_);
 
-	// Initialize depth
-	// Reasonable value for focal length of 5000
+	// Default depth 
 	double init_tz = 1.0;
 
 	// OpenPose torso pairs:
@@ -168,7 +167,7 @@ void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 	for (int orientation = 0; orientation < 2; orientation++)
 	{
 		// Skip second orientation when using warmStarting
-		if (hasPreviousFrame_ && options_.warmStarting && orientation == 1)
+		if (useWarmStarting() && orientation == 1)
 			continue;
 
 		// Parameters to be optimized
@@ -212,7 +211,7 @@ void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 
 		// Add reprojection cost (which includes the temporal residuals if enabled)
 		int num_residuals = keypoints.size() * 2;
-		if (hasPreviousFrame_ && options_.temporalRegularization)
+		if (useTemporalRegularization())
 			num_residuals += 24*3;
 
 		ceres::CostFunction *cost =
@@ -222,7 +221,7 @@ void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 					*cameraModel_, 
 					*smplModel_, 
 					&w_temp, 
-					hasPreviousFrame_ && options_.temporalRegularization ? &prevJoints_ : nullptr
+					useTemporalRegularization() ? &prevJoints_ : nullptr
 				),
 				num_residuals
 			);
@@ -262,6 +261,10 @@ void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 			nullptr,
 			currentPose.data());
 
+		// Freeze shape parameters if option is enabled
+		if (freezeShapeParameters())
+			problem.SetParameterBlockConstant(currentShape.data());
+
 		// SMPLify-x weights schedule
 		// Pose Prior / Shape Prior 
 		std::vector<std::pair<double, double>> weights = {
@@ -276,6 +279,10 @@ void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 		// Staged optimization
 		for (int stage = 0; stage < 4; stage++)
 		{
+			// Skip to last stage if using warStarting
+			if (useWarmStarting() && stage != 3)
+				continue;
+
 			// Update weights
 			// We add the residual blocks to the ceres problem once with a reference
 			// to the weight's variable, so just updating these variables is enough.
@@ -308,10 +315,10 @@ void SMPLOptimizer::fitFull(const std::vector<Point2D> &keypoints)
 	smplModel_->setShape(shapeParams_);
 
 	// Save current pose for the next frame
+	hasPreviousFrame_ = true;
 	prevGlobalT_ = bestTranslation;
 	prevPoseParams_ = bestPose;
 	prevShapeParams_ = bestShape;
-	hasPreviousFrame_ = true;
 
 	// Compute final 3D joints to be used as temporal regularizer in next frame	
 	auto restJoints = smplModel_->regressSmplRestJoints<double>(shapeParams_);
