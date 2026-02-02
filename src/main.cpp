@@ -126,7 +126,7 @@ int main(int argc, char* argv[]) {
     SMPLOptimizer::Options fitOpts;
     fitOpts.temporalRegularization = true;
     fitOpts.warmStarting = true;
-    fitOpts.freezeShapeParameters = true;
+    fitOpts.freezeShapeParameters = false;
     SMPLOptimizer optimizer(&smplModel, &camera, fitOpts);
 
     DebugData debug;
@@ -157,8 +157,6 @@ int main(int argc, char* argv[]) {
     while (loader.readFrame(frame)) {
         frameIdx++;
 
-        if (frameIdx > 600) break;
-
         // Handle debug-frame mode
         if (specificFrame) {
             if (frameIdx < *specificFrame) continue;
@@ -174,7 +172,7 @@ int main(int argc, char* argv[]) {
 
         // Optimization
         t0 = Clock::now();
-        optimizer.fitFrame(keypoints);
+        bool wasSuccessfull = optimizer.fitFrame(keypoints);
         double optMs = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
 
         // Mesh Computation
@@ -186,8 +184,9 @@ int main(int argc, char* argv[]) {
         t0 = Clock::now();
         if (!skipViz) {
             cv::Mat outputFrame = frame.clone();
+            cv::Scalar color = wasSuccessfull ? cv::Scalar(0, 255, 255) : cv::Scalar(0, 0, 255);
+            visualizer.drawMesh(outputFrame, mesh, camera, optimizer.getGlobalT(), color);
             visualizer.drawKeypoints(outputFrame, keypoints);
-            visualizer.drawMesh(outputFrame, mesh, camera, optimizer.getGlobalT());
             visualizer.write(outputFrame);
         }
         double drawMs = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
@@ -209,6 +208,17 @@ int main(int argc, char* argv[]) {
                 kps.push_back({{"x", kp.x}, {"y", kp.y}, {"score", kp.score}});
             }
 
+            json joints = json::array();
+            Eigen::Matrix<double, 24, 3> joints_mat = optimizer.getJoints();
+            for (int i = 0; i < joints_mat.rows(); ++i) {
+                const auto& joint = joints_mat.row(i);
+                joints.push_back({
+                    {"x", joint(0)},
+                    {"y", joint(1)},
+                    {"z", joint(2)}
+                });
+            }
+
             Eigen::Vector3d T = optimizer.getGlobalT();
 
             // Save mesh
@@ -219,7 +229,9 @@ int main(int argc, char* argv[]) {
             
             debug.frames.push_back({
                 {"frame", frameIdx},
+                {"wasSuccessfull", wasSuccessfull},
                 {"keypoints", kps},
+                {"joints", joints},
                 {"globalT", {T(0), T(1), T(2)}},
                 {"pose_params", optimizer.getPoseParams()},
                 {"shape_params", optimizer.getShapeParams()},

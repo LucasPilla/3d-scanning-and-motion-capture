@@ -19,8 +19,12 @@ public:
 	void drawKeypoints(cv::Mat &frame, const std::vector<Point2D> &keypoints);
 
 	// Draw SMPL mesh wireframe overlay on frame
+	void drawWireframe(cv::Mat &frame, const SMPLMesh &mesh, const CameraModel &camera,
+				  const Eigen::Vector3d &globalT, cv::Scalar color);
+
+	// Draw SMPL mesh overlay on frame
 	void drawMesh(cv::Mat &frame, const SMPLMesh &mesh, const CameraModel &camera,
-				  const Eigen::Vector3d &globalT);
+				  const Eigen::Vector3d &globalT, cv::Scalar color);
 
 private:
 	cv::VideoWriter writer;

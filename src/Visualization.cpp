@@ -108,11 +108,11 @@ void Visualization::drawKeypoints(cv::Mat &frame,
 	}
 }
 
-void Visualization::drawMesh(cv::Mat &frame, const SMPLMesh &mesh,
+void Visualization::drawWireframe(cv::Mat &frame, const SMPLMesh &mesh,
 							 const CameraModel &camera,
-							 const Eigen::Vector3d &globalT)
+							 const Eigen::Vector3d &globalT,
+							 cv::Scalar color)
 {
-	const cv::Scalar &color = cv::Scalar(0, 255, 255);
 	int lineThickness = 1;
 
 	const float fx = camera.intrinsics().fx;
@@ -176,4 +176,75 @@ void Visualization::drawMesh(cv::Mat &frame, const SMPLMesh &mesh,
 					 lineThickness, cv::LINE_AA);
 		}
 	}
+}
+
+void Visualization::drawMesh(cv::Mat &frame, const SMPLMesh &mesh,
+                             const CameraModel &camera,
+                             const Eigen::Vector3d &globalT,
+                             cv::Scalar color)
+{
+    const auto& K = camera.intrinsics();
+    const Eigen::Vector3f T = globalT.cast<float>();
+    const int numVerts = mesh.vertices.size();
+
+    std::vector<cv::Point> points2d(numVerts);
+    std::vector<float> depths(numVerts);
+    std::vector<uint8_t> isVisible(numVerts, 0); 
+
+    // Project all vertices
+    for (int i = 0; i < numVerts; ++i) {
+        Eigen::Vector3f v = mesh.vertices[i] + T;
+        
+        if (v.z() <= 0.1f) continue; // Skip if behind camera
+
+        float invZ = 1.0f / v.z();
+        points2d[i].x = static_cast<int>(K.fx * v.x() * invZ + K.cx);
+        points2d[i].y = static_cast<int>(K.fy * v.y() * invZ + K.cy);
+        depths[i] = v.z();
+        isVisible[i] = 1;
+    }
+
+    // Build draw list 
+    std::vector<std::pair<float, int>> drawList;
+    drawList.reserve(mesh.faces.size());
+
+    for (int i = 0; i < (int)mesh.faces.size(); ++i) {
+        const auto& f = mesh.faces[i];
+        
+        // Skip if any vertex is invalid
+        if (!isVisible[f.x()] || !isVisible[f.y()] || !isVisible[f.z()]) continue;
+
+        const cv::Point& p0 = points2d[f.x()];
+        const cv::Point& p1 = points2d[f.y()];
+        const cv::Point& p2 = points2d[f.z()];
+
+        // 2D Cross Product for Backface Culling: (p1-p0) x (p2-p0)
+        float cross = (p1.x - p0.x) * (p2.y - p0.y) - (p1.y - p0.y) * (p2.x - p0.x);
+        
+        if (cross < 0) { 
+            float zSum = depths[f.x()] + depths[f.y()] + depths[f.z()];
+            drawList.push_back({zSum, i});
+        }
+    }
+
+    // Sort faces by depth
+    std::sort(drawList.begin(), drawList.end(), std::greater<std::pair<float, int>>());
+
+    // Render
+    const Eigen::Vector3f lightDir(0.0f, 0.0f, -1.0f);
+
+    for (const auto& item : drawList) {
+        const auto& f = mesh.faces[item.second];
+        
+        // Calculate Normal for shading
+        Eigen::Vector3f v0 = mesh.vertices[f.x()];
+        Eigen::Vector3f v1 = mesh.vertices[f.y()];
+        Eigen::Vector3f v2 = mesh.vertices[f.z()];
+        Eigen::Vector3f normal = (v1 - v0).cross(v2 - v0).normalized();
+
+        float intensity = std::max(0.1f, normal.dot(lightDir));
+        
+        cv::Point tri[3] = { points2d[f.x()], points2d[f.y()], points2d[f.z()] };
+        cv::fillConvexPoly(frame, tri, 3, color * intensity, cv::LINE_AA);
+    }
 }

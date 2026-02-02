@@ -25,12 +25,12 @@ public:
 
   // Check if warm starting can be used
   bool useWarmStarting() { 
-    return hasPreviousFrame_ && options_.warmStarting; 
+    return hasPrevFrame_ && options_.warmStarting && badFrameCounter_ < 5; 
   }
 
   // Check if temporal regularization can be used
   bool useTemporalRegularization() { 
-    return hasPreviousFrame_ && options_.temporalRegularization;
+    return hasPrevFrame_ && options_.temporalRegularization && badFrameCounter_ < 5;
   }
 
   // Check if shape parameters can be freezed
@@ -41,18 +41,19 @@ public:
   explicit SMPLOptimizer(SMPLModel *smplModel, CameraModel *cameraModel, const Options &options);
 
   // Fit SMPL parameters to a single frame
-  void fitFrame(const std::vector<Point2D> &keypoints);
+  bool fitFrame(const std::vector<Point2D> &keypoints);
 
   // Step 1: Estimate initial translation and rotation based on torso joints.
   void fitInitialization(const std::vector<Point2D> &keypoints);
 
   // Step 2: Optimize SMPL parameters
-  void fitFull(const std::vector<Point2D> &keypoints);
+  bool fitFull(const std::vector<Point2D> &keypoints);
 
   // Expose parameters
   const Eigen::Vector3d &getGlobalT() const { return globalT_; }
   const Eigen::VectorXd &getPoseParams() const { return poseParams_; }
   const Eigen::VectorXd &getShapeParams() const { return shapeParams_; }
+  const Eigen::Matrix<double, 24, 3> &getJoints() const { return prevJoints_; }
 
   // Expose optimization summary
   const ceres::Solver::Summary &getInitSummary() const { return initSummary_; }
@@ -78,7 +79,8 @@ private:
   CameraModel *cameraModel_ = nullptr;
 
   // Previous (t-1) frame
-  bool hasPreviousFrame_ = false;
+  int badFrameCounter_ = 0;
+  bool hasPrevFrame_ = false;
   Eigen::VectorXd prevGlobalT_;
   Eigen::VectorXd prevPoseParams_;
   Eigen::VectorXd prevShapeParams_;

@@ -131,12 +131,13 @@ struct ReprojectionCost
 		const SMPLModel &smplModel,
 		const double *temporalWeight,
 		const Eigen::Matrix<double, 24, 3> *prevJoints
-	)
-		: keypoints_(keypoints),
-		  cameraModel_(cameraModel),
-		  smplModel_(smplModel),
-		  temporalWeight_(temporalWeight),
-		  prevJoints_(prevJoints) {}
+	) : 
+		keypoints_(keypoints),
+		cameraModel_(cameraModel),
+		smplModel_(smplModel),
+		temporalWeight_(temporalWeight),
+		prevJoints_(prevJoints)
+	{}
 
 	template <typename T>
 	bool operator()(
@@ -145,6 +146,8 @@ struct ReprojectionCost
 		const T *const shapeParamsPtr,
 		T *residuals) const
 	{
+		int residualOffset = 0;
+
 		// Map raw pointer to Eigen vector
 		Eigen::Map<const Eigen::Matrix<T, 3, 1>> globalT(globalTPtr);
 		Eigen::Map<const Eigen::Matrix<T, 72, 1>> poseParams(poseParamsPtr);
@@ -192,11 +195,11 @@ struct ReprojectionCost
             T err_x = u - T(kp.x);
             T err_y = v - T(kp.y);
 
-			// Apply Geman-McClure Robustifier
-			T r2 = err_x * err_x + err_y * err_y;
+			// Weight according to Geman-McClure Loss
+			T residual_squared = err_x * err_x + err_y * err_y;
             T sigma = T(100.0);
-            T sigma2 = T(sigma * sigma);
-            T scale = ceres::sqrt(sigma2 / (sigma2 + r2 + T(1e-12)));
+            T sigma_squared = T(sigma * sigma);
+            T scale = ceres::sqrt(sigma_squared / (sigma_squared + residual_squared + T(1e-8)));
 
 			// Weight by keypoint confidence
             T confidence = T(kp.score);
@@ -204,23 +207,24 @@ struct ReprojectionCost
 			// Weight according to frame height
 			T factor = T(1000.0 / cameraModel_.getFrameHeight());
 
-            residuals[opIdx * 2] = factor * confidence * scale * err_x;
-            residuals[opIdx * 2 + 1] = factor * confidence * scale * err_y;
+            residuals[residualOffset++] = factor * confidence * scale * err_x;
+            residuals[residualOffset++] = factor * confidence * scale * err_y;
         }
 
-		// Add temporal residuals
+		// Add temporal residuals based on euclidean distance to previous joints.
+		// We skip fisrt joint (root)
 		// We keep this within ReprojectionCost to avoid recomputing joints in
 		// another residual block.
 		if (prevJoints_) {
-            int offset = keypoints_.size() * 2;
             T weight = T(*temporalWeight_);
-            for (int i = 0; i < 24; ++i) {
-                Eigen::Matrix<T, 3, 1> currentJ3D = jointTransforms.G_trans[i] + globalT;
-                Eigen::Matrix<T, 3, 1> targetJ3D = prevJoints_->row(i).cast<T>();
-                residuals[offset + i*3 + 0] = weight * (currentJ3D.x() - targetJ3D.x());
-                residuals[offset + i*3 + 1] = weight * (currentJ3D.y() - targetJ3D.y());
-                residuals[offset + i*3 + 2] = weight * (currentJ3D.z() - targetJ3D.z());
-            }
+            for (int smplIdx = 0; smplIdx < 24; smplIdx++) {
+                Eigen::Matrix<T, 3, 1> currentJoints = jointTransforms.G_trans[smplIdx];
+				Eigen::Matrix<T, 3, 1> prevJoints = prevJoints_->row(smplIdx).transpose().cast<T>();
+				Eigen::Matrix<T, 3, 1> velocity = currentJoints - prevJoints;
+				residuals[residualOffset++] = weight * velocity.x();
+				residuals[residualOffset++] = weight * velocity.y();
+				residuals[residualOffset++] = weight * velocity.z();
+        	}
         }
 
 		return true;
@@ -349,10 +353,10 @@ struct JointLimitCost
 	{
 		// Left Elbow (55), Right Elbow (58), Left Knee (12), Right Knee (15)
 		T weight = T(*weight_);
-		residuals[0] = weight * ceres::pow(ceres::exp(poseParams[55]), T(2));
-		residuals[1] = weight * ceres::pow(ceres::exp(-poseParams[58]), T(2));
-		residuals[2] = weight * ceres::pow(ceres::exp(-poseParams[12]), T(2));
-		residuals[3] = weight * ceres::pow(ceres::exp(-poseParams[15]), T(2));
+		residuals[0] = weight * ceres::fmax(poseParams[55], T(0.0));
+		residuals[1] = weight * ceres::fmax(-poseParams[58], T(0.0));
+		residuals[2] = weight * ceres::fmax(-poseParams[12], T(0.0));
+		residuals[3] = weight * ceres::fmax(-poseParams[15], T(0.0));
 		return true;
 	}
 
@@ -360,3 +364,26 @@ struct JointLimitCost
 	// can be updated without recreating the residual block.
 	const double *weight_;
 };
+
+// Cost Functor: Temporal Cost.
+// L2 regularization penalizing deviations from the previous frame's pose parameters.
+struct TemporalCost
+{
+	TemporalCost(double *weight, const Eigen::VectorXd &prevValues)
+	: weight_(weight), prevValues_(prevValues) {}
+
+	template <typename T>
+	bool operator()(const T *const currentValues, T *residuals) const 
+	{
+		for (int i = 0; i < prevValues_.size(); ++i)
+			residuals[i] = T(*weight_) * (currentValues[i] - T(prevValues_(i)));
+
+		return true;
+	}
+
+	double *weight_;
+
+	// Values from previos frame
+	const Eigen::VectorXd prevValues_;
+};
+
