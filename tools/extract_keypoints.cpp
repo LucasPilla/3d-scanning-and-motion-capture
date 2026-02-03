@@ -17,18 +17,27 @@
 
 #include <iostream>
 #include <fstream>
+#include <filesystem>
+namespace fs = std::filesystem;
+
 
 int main(int argc, char** argv)
 {
     // Expects two arguments: input video path, output JSON file path
-    if (argc < 3) {
-        std::cerr << "Usage: " << argv[0]
-                  << " <video_path> <output_json>\n";
+    // Expects one argument: input video path
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " <video_path>\n";
         return 1;
     }
 
-    std::string videoPath = argv[1];
-    std::string outputPath = argv[2];
+    fs::path videoPath = fs::path(argv[1]);
+
+    // Extract filename without extension
+    std::string baseName = videoPath.stem().string();
+
+    // Build output filename: keypoints_<video>.json
+    fs::path outputPath = videoPath.parent_path() / ("keypoints_" + baseName + ".json");
+
 
     // Open video
     cv::VideoCapture cap(videoPath);
@@ -42,6 +51,9 @@ int main(int argc, char** argv)
     op::WrapperStructPose poseConfig;
     poseConfig.modelFolder = "/opt/openpose/models/";
     poseConfig.renderMode  = op::RenderMode::None;
+
+    //poseConfig.gpuNumber = -1;  // <- Force CPU mode
+
 
     // Create OpenPose wrapper
     op::Wrapper opWrapper{op::ThreadManagerMode::Asynchronous};
