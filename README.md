@@ -47,7 +47,7 @@ To run this application, you need to download the **SMPL model**, **GMM**, and *
   Download from [https://smplify.is.tue.mpg.de/download.php](https://smplify.is.tue.mpg.de/download.php).  
   This link provides the GMM file (`.pkl`).
 
-- **OpenPose joint regressor**
+- **OpenPose joint regressor**:  
   Download from EasyMocap repository [https://github.com/zju3dv/EasyMocap/tree/master/data/smplx](https://github.com/zju3dv/EasyMocap/tree/master/data/smplx).
   The file is named `J_regressor_body25.npy`.
 
