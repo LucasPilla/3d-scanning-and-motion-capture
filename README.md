@@ -8,10 +8,10 @@
 - [x] Implement 2D keypoint detection with OpenPose
 - [x] Implement SMPL parameters optimization with Ceres
 - [x] Implement proposals
-- [ ] Evaluate baseline
-- [ ] Evaluate proposals
-- [ ] Write the final report
-- [ ] Prepare presentation
+- [x] Evaluate baseline
+- [x] Evaluate proposals
+- [x] Write the final report
+- [x] Prepare presentation
 
 ## Setup
 
@@ -35,7 +35,9 @@ docker run -it --rm -v $(pwd):/usr/src/project 3dsmc-project
 
 ## Data
 
-To run this application, you need to download the **SMPL model** and the **GMM** files:
+We do not provide that data in this repository, according to license restrictions.
+
+To run this application, you need to download the **SMPL model**, **GMM**, and **OpenPose joint regressor** files:
 
 - **SMPL model**:  
   Download from [https://smpl.is.tue.mpg.de/download.php](https://smpl.is.tue.mpg.de/download.php).  
@@ -44,6 +46,10 @@ To run this application, you need to download the **SMPL model** and the **GMM**
 - **GMM**:  
   Download from [https://smplify.is.tue.mpg.de/download.php](https://smplify.is.tue.mpg.de/download.php).  
   This link provides the GMM file (`.pkl`).
+
+- **OpenPose joint regressor**
+  Download from EasyMocap repository [https://github.com/zju3dv/EasyMocap/tree/master/data/smplx](https://github.com/zju3dv/EasyMocap/tree/master/data/smplx).
+  The file is named `J_regressor_body25.npy`.
 
 These files are required to run the `preprocess.py` script located in the `scripts` folder.  
 The script generates a JSON file containing all model data, which is then passed as a parameter to the pipeline.
