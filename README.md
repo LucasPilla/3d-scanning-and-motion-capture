@@ -54,6 +54,39 @@ To run this application, you need to download the **SMPL model**, **GMM**, and *
 These files are required to run the `preprocess.py` script located in the `scripts` folder.  
 The script generates a JSON file containing all model data, which is then passed as a parameter to the pipeline.
 
+To run the preprocess step you must install the dependencies from `requirements.txt` and execute: 
+
+```text
+usage: preprocess.py [-h] --model_path MODEL_PATH --save_dir SAVE_DIR --output_name OUTPUT_NAME --gmm GMM --openpose_joint_regressor
+                     OPENPOSE_JOINT_REGRESSOR [--capsule_regressor_path CAPSULE_REGRESSOR_PATH]
+
+Preprocess SMPL models into JSON.
+
+options:
+  -h, --help            show this help message and exit
+  --model_path MODEL_PATH
+                        Path to the raw SMPL model (pickle)
+  --save_dir SAVE_DIR   Directory to save the processed output
+  --output_name OUTPUT_NAME
+                        Name of the output JSON file (e.g., smpl_model.json)
+  --gmm GMM             Path to the GMM prior (pickle)
+  --openpose_joint_regressor OPENPOSE_JOINT_REGRESSOR
+                        Path to the OpenPose joint regressor (.npy)
+  --capsule_regressor_path CAPSULE_REGRESSOR_PATH
+                        Path to the capsule regressors .npz file (Optional)
+```
+
+For example, considering that all data is download within `models` folder:
+
+```bash
+  python3 scripts/preprocess.py  \
+    --model_path ./models/basicmodel_m_lbs_10_207_0_v1.0.0.pkl \
+    --gmm ./models/gmm_08.pkl \
+    --openpose_joint_regressor ./models/J_regressor_body25.npy \
+    --save_dir ./models/ \
+    --output_name smpl_male.json
+```
+
 ## Build 
 
 Once inside the container, build the project using CMake:
