@@ -38,6 +38,36 @@ static const std::vector<int> OPENPOSE_TO_SMPL = {
 	8   // 24 RHeel -> R_Ankle
 };
 
+// This mapping is only used for weighting the velocity term of temporal residuals. 
+// Index = SMPL Joint Index (0-23)
+// Value = OpenPose BODY_25 Index 
+static constexpr int SMPL_TO_OPENPOSE[24] = {
+    8,  // 0  Pelvis      -> MidHip (8)
+    12, // 1  L_Hip       -> LHip (12)
+    9,  // 2  R_Hip       -> RHip (9)
+    8,  // 3  Spine1      -> PROXY: MidHip (8) (Lower spine visibility)
+    13, // 4  L_Knee      -> LKnee (13)
+    10, // 5  R_Knee      -> RKnee (10)
+    1,  // 6  Spine2      -> PROXY: Neck (1) (Upper spine visibility)
+    14, // 7  L_Ankle     -> LAnkle (14)
+    11, // 8  R_Ankle     -> RAnkle (11)
+    1,  // 9  Spine3      -> PROXY: Neck (1) (Chest visibility)
+    19, // 10 L_Foot      -> LBigToe (19)
+    22, // 11 R_Foot      -> RBigToe (22)
+    1,  // 12 Neck        -> Neck (1)
+    5,  // 13 L_Collar    -> PROXY: LShoulder (5) (Collar follows shoulder)
+    2,  // 14 R_Collar    -> PROXY: RShoulder (2) (Collar follows shoulder)
+    0,  // 15 Head        -> Nose (0)
+    5,  // 16 L_Shoulder  -> LShoulder (5)
+    2,  // 17 R_Shoulder  -> RShoulder (2)
+    6,  // 18 L_Elbow     -> LElbow (6)
+    3,  // 19 R_Elbow     -> RElbow (3)
+    7,  // 20 L_Wrist     -> LWrist (7)
+    4,  // 21 R_Wrist     -> RWrist (4)
+    7,  // 22 L_Hand      -> PROXY: LWrist (7) (Hand follows wrist)
+    4   // 23 R_Hand      -> PROXY: RWrist (4) (Hand follows wrist)
+};
+
 // Cost Functor: Reprojection Error (Initialization).
 // Computes the reprojection error for global translation and global rotation
 // for the first optimization step.
@@ -101,11 +131,11 @@ struct InitReprojectionCost
 	const CameraModel &cameraModel_;
 };
 
-// Cost Functor: Depth Regularization (Initialization).
+// Cost Functor: Depth Regularization.
 // Penalizes deviation from an initial depth (Z) to prevent it to explode or vanish
-struct InitDepthRegularizer
+struct DepthRegularizer
 {
-	InitDepthRegularizer(double weight, double init_z) 
+	DepthRegularizer(double weight, double init_z) 
 	: weight_(weight), init_z_(init_z) {}
 
 	template <typename T>
@@ -130,13 +160,15 @@ struct ReprojectionCost
 		const CameraModel &cameraModel,
 		const SMPLModel &smplModel,
 		const double *temporalWeight,
-		const Eigen::Matrix<double, 24, 3> *prevJoints
+		const Eigen::Matrix<double, 24, 3> *prevJoints,
+		const Eigen::Matrix<double, 24, 3> *prevPrevJoints
 	) : 
 		keypoints_(keypoints),
 		cameraModel_(cameraModel),
 		smplModel_(smplModel),
 		temporalWeight_(temporalWeight),
-		prevJoints_(prevJoints)
+		prevJoints_(prevJoints),
+		prevPrevJoints_(prevPrevJoints)
 	{}
 
 	template <typename T>
@@ -195,35 +227,44 @@ struct ReprojectionCost
             T err_x = u - T(kp.x);
             T err_y = v - T(kp.y);
 
-			// Weight according to Geman-McClure Loss
-			T residual_squared = err_x * err_x + err_y * err_y;
-            T sigma = T(100.0);
-            T sigma_squared = T(sigma * sigma);
-            T scale = ceres::sqrt(sigma_squared / (sigma_squared + residual_squared + T(1e-8)));
-
 			// Weight by keypoint confidence
             T confidence = T(kp.score);
 
 			// Weight according to frame height
 			T factor = T(1000.0 / cameraModel_.getFrameHeight());
 
-            residuals[residualOffset++] = factor * confidence * scale * err_x;
-            residuals[residualOffset++] = factor * confidence * scale * err_y;
+            residuals[residualOffset++] = factor * confidence * err_x;
+            residuals[residualOffset++] = factor * confidence * err_y;
         }
 
-		// Add temporal residuals based on euclidean distance to previous joints.
-		// We skip fisrt joint (root)
-		// We keep this within ReprojectionCost to avoid recomputing joints in
-		// another residual block.
-		if (prevJoints_) {
-            T weight = T(*temporalWeight_);
+		// Add temporal residuals based on joints "acceleration" and "velocity".
+		// We consider position w.r.t. root joint, not world coordinates.
+		// We keep this within ReprojectionCost to avoid recomputing forward kinematics.
+		if (prevJoints_ && prevPrevJoints_) {
+            T w_acc = T(*temporalWeight_);
             for (int smplIdx = 0; smplIdx < 24; smplIdx++) {
-                Eigen::Matrix<T, 3, 1> currentJoints = jointTransforms.G_trans[smplIdx];
-				Eigen::Matrix<T, 3, 1> prevJoints = prevJoints_->row(smplIdx).transpose().cast<T>();
-				Eigen::Matrix<T, 3, 1> velocity = currentJoints - prevJoints;
-				residuals[residualOffset++] = weight * velocity.x();
-				residuals[residualOffset++] = weight * velocity.y();
-				residuals[residualOffset++] = weight * velocity.z();
+				// Get history
+				Eigen::Matrix<T, 3, 1> prevPrevJoint = prevPrevJoints_->row(smplIdx).transpose().cast<T>();
+				Eigen::Matrix<T, 3, 1> prevJoint = prevJoints_->row(smplIdx).transpose().cast<T>();
+				Eigen::Matrix<T, 3, 1> currentJoint = jointTransforms.G_trans[smplIdx];
+
+				// Compute "derivatives"
+				Eigen::Matrix<T, 3, 1> prevVelocity = prevJoint - prevPrevJoint;
+				Eigen::Matrix<T, 3, 1> velocity = currentJoint - prevJoint;
+				Eigen::Matrix<T, 3, 1> acceleration = velocity - prevVelocity;
+
+				// Acceleration term 
+				residuals[residualOffset++] = w_acc * acceleration.x();
+				residuals[residualOffset++] = w_acc * acceleration.y();
+				residuals[residualOffset++] = w_acc * acceleration.z();
+
+				// Velocity term (friction to stop movement when joint is not visible)
+				int opIdx = SMPL_TO_OPENPOSE[smplIdx];
+				Point2D kp = keypoints_[opIdx];
+				T w_vel = kp.score > 0.1 ? T(0.1) * w_acc : T(0.5) * w_acc;
+				residuals[residualOffset++] = w_vel * velocity.x();
+				residuals[residualOffset++] = w_vel * velocity.y();
+				residuals[residualOffset++] = w_vel * velocity.z();
         	}
         }
 
@@ -244,6 +285,7 @@ struct ReprojectionCost
 
 	// Previous joints for temporal residuals
 	const Eigen::Matrix<double, 24, 3> *prevJoints_;
+	const Eigen::Matrix<double, 24, 3> *prevPrevJoints_;
 };
 
 // Cost Functor: GMM Pose Prior.

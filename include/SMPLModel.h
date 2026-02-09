@@ -107,10 +107,6 @@ public:
 	//   - "gmm_means" 			      : (8, 69)
 	//   - "gmm_covars" 		      : (8, 69, 69)
 	//   - "gmm_weights" 		      : (8)
-	//   - "capsule_v2lens" 	  	(not used)
-	//   - "capsule_betas2lens" 	(not used)
-	//   - "capsule_v2rads" 	  	(not used)
-	//   - "capsule_betas2rads" 	(not used)
 	bool loadFromJson(const std::string &jsonPath);
 
 	// Set SMPL pose parameters (e.g. 72 axis-angle parameters).

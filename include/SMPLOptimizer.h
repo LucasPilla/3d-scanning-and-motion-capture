@@ -20,23 +20,7 @@ public:
   struct Options {
     bool temporalRegularization = false;
     bool warmStarting = false;
-    bool freezeShapeParameters = false;
   };
-
-  // Check if warm starting can be used
-  bool useWarmStarting() { 
-    return hasPrevFrame_ && options_.warmStarting && badFrameCounter_ < 5; 
-  }
-
-  // Check if temporal regularization can be used
-  bool useTemporalRegularization() { 
-    return hasPrevFrame_ && options_.temporalRegularization && badFrameCounter_ < 5;
-  }
-
-  // Check if shape parameters can be freezed
-  bool freezeShapeParameters() { 
-    return prevShapeParams_.size() > 0 && options_.freezeShapeParameters;
-  }
 
   explicit SMPLOptimizer(SMPLModel *smplModel, CameraModel *cameraModel, const Options &options);
 
@@ -81,10 +65,12 @@ private:
   // Previous (t-1) frame
   int badFrameCounter_ = 0;
   bool hasPrevFrame_ = false;
+  bool hasPrevPrevFrame_ = false;
   Eigen::VectorXd prevGlobalT_;
   Eigen::VectorXd prevPoseParams_;
   Eigen::VectorXd prevShapeParams_;
   Eigen::Matrix<double, 24, 3> prevJoints_;
+  Eigen::Matrix<double, 24, 3> prevPrevJoints_;
 
   // Summary for ceres optimizer
   ceres::Solver::Summary initSummary_;

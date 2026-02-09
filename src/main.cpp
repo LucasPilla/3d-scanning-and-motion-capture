@@ -124,9 +124,8 @@ int main(int argc, char* argv[]) {
 
     // Initializer optimizer
     SMPLOptimizer::Options fitOpts;
-    fitOpts.temporalRegularization = true;
     fitOpts.warmStarting = true;
-    fitOpts.freezeShapeParameters = false;
+    fitOpts.temporalRegularization = true;
     SMPLOptimizer optimizer(&smplModel, &camera, fitOpts);
 
     DebugData debug;
@@ -146,8 +145,7 @@ int main(int argc, char* argv[]) {
         }},
         {"optimizer", {
             {"temporal_regularization", fitOpts.temporalRegularization},
-            {"warm_starting", fitOpts.warmStarting},
-            {"freeze_shape", fitOpts.freezeShapeParameters}
+            {"warm_starting", fitOpts.warmStarting}
         }}
     };
 
@@ -209,9 +207,9 @@ int main(int argc, char* argv[]) {
             }
 
             json joints = json::array();
-            Eigen::Matrix<double, 24, 3> joints_mat = optimizer.getJoints();
-            for (int i = 0; i < joints_mat.rows(); ++i) {
-                const auto& joint = joints_mat.row(i);
+            Eigen::Matrix<double, 24, 3> jointsOptimizer = optimizer.getJoints();
+            for (int i = 0; i < jointsOptimizer.rows(); ++i) {
+                const auto& joint = jointsOptimizer.row(i);
                 joints.push_back({
                     {"x", joint(0)},
                     {"y", joint(1)},

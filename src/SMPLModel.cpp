@@ -272,54 +272,6 @@ bool SMPLModel::loadFromJson(const std::string &jsonPath)
 		// Precompute GMM mean pose
 		gmmMeanPose_ = gmmMeans_.transpose() * gmmWeights_;
 
-		// // -------- capsule_v2lens --------
-		// if (j.contains("capsule_v2lens")) {
-		//   const auto &capsule_v2lens = j.at("capsule_v2lens");
-		//   int capsuleV2lensRows = static_cast<int>(capsule_v2lens.size());
-		//   int capsuleV2lensCols = static_cast<int>(capsule_v2lens[0].size());
-		//   capsuleV2Lens_.resize(capsuleV2lensRows, capsuleV2lensCols);
-		//   for (int i = 0; i < capsuleV2lensRows; ++i)
-		//     for (int k = 0; k < capsuleV2lensCols; ++k)
-		//       capsuleV2Lens_(i, k) = static_cast<double>(capsule_v2lens[i][k]);
-		// }
-
-		// // -------- capsule_betas2lens --------
-		// if (j.contains("capsule_betas2lens")) {
-		//   const auto &capsule_betas2lens = j.at("capsule_betas2lens");
-		//   int capsuleBetas2lensRows = static_cast<int>(capsule_betas2lens.size());
-		//   int capsuleBetas2lensCols =
-		//       static_cast<int>(capsule_betas2lens[0].size());
-		//   capsuleBetas2Lens_.resize(capsuleBetas2lensRows, capsuleBetas2lensCols);
-		//   for (int i = 0; i < capsuleBetas2lensRows; ++i)
-		//     for (int k = 0; k < capsuleBetas2lensCols; ++k)
-		//       capsuleBetas2Lens_(i, k) =
-		//           static_cast<double>(capsule_betas2lens[i][k]);
-		// }
-
-		// // -------- capsule_v2rads --------
-		// if (j.contains("capsule_v2rads")) {
-		//   const auto &capsule_v2rads = j.at("capsule_v2rads");
-		//   int capsuleV2radsRows = static_cast<int>(capsule_v2rads.size());
-		//   int capsuleV2radsCols = static_cast<int>(capsule_v2rads[0].size());
-		//   capsuleV2Rads_.resize(capsuleV2radsRows, capsuleV2radsCols);
-		//   for (int i = 0; i < capsuleV2radsRows; ++i)
-		//     for (int k = 0; k < capsuleV2radsCols; ++k)
-		//       capsuleV2Rads_(i, k) = static_cast<double>(capsule_v2rads[i][k]);
-		// }
-
-		// // -------- capsule_betas2rads --------
-		// if (j.contains("capsule_betas2rads")) {
-		//   const auto &capsule_betas2rads = j.at("capsule_betas2rads");
-		//   int capsuleBetas2radsRows = static_cast<int>(capsule_betas2rads.size());
-		//   int capsuleBetas2radsCols =
-		//       static_cast<int>(capsule_betas2rads[0].size());
-		//   capsuleBetas2Rads_.resize(capsuleBetas2radsRows, capsuleBetas2radsCols);
-		//   for (int i = 0; i < capsuleBetas2radsRows; ++i)
-		//     for (int k = 0; k < capsuleBetas2radsCols; ++k)
-		//       capsuleBetas2Rads_(i, k) =
-		//           static_cast<double>(capsule_betas2rads[i][k]);
-		// }
-
 		// ---------- Precompute for optimzation ----------
 		// Used in ReprojectionCost for directly computing joints
 
