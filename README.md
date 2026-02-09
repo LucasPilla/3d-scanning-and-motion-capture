@@ -1,6 +1,7 @@
 # 3d-scanning-and-motion-capture
 
 [![Open Proposal](https://img.shields.io/badge/Proposal-PDF-red?style=flat-square)](https://github.com/LucasPilla/3d-scanning-and-motion-capture/blob/main/docs/proposal.pdf)
+[![Open Final Report](https://img.shields.io/badge/Final%20Report-PDF-red?style=flat-square)](https://github.com/LucasPilla/3d-scanning-and-motion-capture/blob/main/docs/report.pdf)
 
 ## TODO
 
