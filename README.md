@@ -1,18 +1,18 @@
-# 3d-scanning-and-motion-capture
+# 3D Scanning and Motion Capture
 
-[![Open Proposal](https://img.shields.io/badge/Proposal-PDF-red?style=flat-square)](https://github.com/LucasPilla/3d-scanning-and-motion-capture/blob/main/docs/proposal.pdf)
-[![Open Final Report](https://img.shields.io/badge/Final%20Report-PDF-red?style=flat-square)](https://github.com/LucasPilla/3d-scanning-and-motion-capture/blob/main/docs/report.pdf)
+[![Proposal](https://img.shields.io/badge/Proposal-PDF-red?style=flat-square)](https://github.com/LucasPilla/3d-scanning-and-motion-capture/blob/main/docs/proposal.pdf)
+[![Final Report](https://img.shields.io/badge/Final%20Report-PDF-red?style=flat-square)](https://github.com/LucasPilla/3d-scanning-and-motion-capture/blob/main/docs/report.pdf)
 
-## TODO
+A pipeline for 3D human pose estimation and motion capture from video, based on SMPLify,
 
-- [x] Configure repository, CMake and Docker
-- [x] Implement 2D keypoint detection with OpenPose
-- [x] Implement SMPL parameters optimization with Ceres
-- [x] Implement proposals
-- [x] Evaluate baseline
-- [x] Evaluate proposals
-- [x] Write the final report
-- [x] Prepare presentation
+<video src="./data/TS6_results.mp4" controls width="100%"></video>
+
+## Table of Contents
+
+- [Setup](#setup)
+- [Data & Preprocessing](#data--preprocessing)
+- [Build](#build)
+- [Run](#run)
 
 ## Setup
 
@@ -28,7 +28,7 @@ Navigate to the folder containing the `Dockerfile` and build the image. This wil
 docker build -t 3dsmc-project .
 ```
 
-Then, run the container using the command below. This mounts your current directory to `/usr/src/project` inside the container so you can access your code and video files.
+Then, run the container using the command below. This mounts your current directory to `/usr/src/project` inside the container so you can access your project files.
 
 ```
 docker run -it --rm -v $(pwd):/usr/src/project 3dsmc-project
