@@ -5,7 +5,7 @@
 
 A pipeline for 3D human pose estimation and motion capture from video, based on SMPLify,
 
-<video src="./data/TS6_results.mp4" controls width="100%"></video>
+![Demo](./data/TS6_results.gif)
 
 ## Table of Contents
 
